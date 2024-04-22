@@ -1,25 +1,30 @@
+import time
 import logging
 
 import numpy as np
 import gymnasium as gym
-
-import multiprocessing as mp
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from threading import Thread
 
 from abc import abstractmethod
 from typing import List, Union
 
 from tqdm import tqdm
 
-from rlcollection.rlsync import SYNC_obj
+# from rlcollection.rlsync import RlSync, RLSYNC_obj
+from rlcollection.rlsync import RlSync
+
 from rlcollection.rlagents import DQNAgent
+
+from multiprocessing import Process
+import multiprocessing as mp
 
 import matplotlib.pyplot as plt
 
-__version__ = 0.007
+__version__ = 0.010
 
 logger = logging.getLogger()
+
+
+# RLSYNC_obj = RlSync()
 
 
 class RLBase:
@@ -40,10 +45,9 @@ class RLBase:
         self.agents_base: list = []
         self.seed: int = seed
         self.net = None
-        self.total_rewards: list = []
-        self.episodes_length: list = []
         self._check_params(kwargs)
         self.total_timesteps = 0
+        # self.RLSYNC_obj = RlSync()
 
     def _check_params(self, params):
         for k, v in params.items():
@@ -86,39 +90,60 @@ class RLDQN(RLBase):
             *kwargs:
         """
         super().__init__(env, agents_num, agents_devices, seed, **kwargs)
-        self.agents_base: list = []
         assert len(agents_devices) == agents_num, "Error: Q-ty of agents_num and agents_devices must equal"
-        for ix, device in zip(range(self.agents_num), self.agents_devices):
-            self.agents_base.append(DQNAgent(env, seed=self.seed, device=device))
+        self.agents_devices = agents_devices
+        self.agents_num = agents_num
+
+    def pbar_updater(self, rlsync_obj, total):
+
+        pbar = tqdm(total=total)
+        while rlsync_obj.get_time_step() <= rlsync_obj.get_total_time_steps():
+            pbar.n = rlsync_obj.get_time_step()
+            pbar.refresh()
+        pbar.close()
 
     def learn(self, total_timesteps):
         self.total_timesteps = total_timesteps
-        threads: list = []
-        if SYNC_obj.sync_total_time_steps == 0 or SYNC_obj.sync_total_time_steps != total_timesteps:
-            SYNC_obj.sync_total_time_steps = total_timesteps
 
-        def thread_target(idx: int):
-            try:
-                episode_reward, episode_length = self.agents_base[idx].agent_learn()
-                with SYNC_obj.lock:
-                    pbar.update(episode_length)
-                    self.total_rewards.append(episode_reward)
-                    self.episodes_length.append(episode_length)
-            except (KeyboardInterrupt, SystemExit):
-                pass
+        for ix, device in zip(range(self.agents_num), self.agents_devices):
+            self.agents_base.append(DQNAgent(env, seed=self.seed, device=device))
 
-        pbar = tqdm(total=SYNC_obj.sync_total_time_steps)
-        while SYNC_obj.sync_time_step < SYNC_obj.sync_total_time_steps:
-            threads: list = []
-            for ix in range(len(self.agents_base)):
-                threads.append(Thread(target=thread_target,
-                                      args=(ix,),
-                                      name=f'DQN_{ix}')
-                               )
-                threads[-1].start()
-                threads[-1].join()
-        pbar.refresh()
-        pbar.close()
+        RLSYNC_obj = RlSync()
+
+        with RLSYNC_obj:
+            if RLSYNC_obj.get_total_time_steps() == 0 or RLSYNC_obj.get_total_time_steps() != total_timesteps:
+                RLSYNC_obj.set_total_time_steps(total_timesteps)
+
+            #   setup agents base
+
+            # pbar = tqdm(total=RLSYNC_obj.get_total_time_steps())
+            mp_pool: list = []
+
+            # mp_pool.append(Process(target=self.pbar_updater, args=(RLSYNC_obj, RLSYNC_obj.get_total_time_steps()),
+            #                        name=f'pbar_{ix}'))
+            # mp_pool[-1].start()
+
+            for ix, agent in enumerate(self.agents_base):
+                mp_pool.append(
+                    Process(target=self.agents_base[ix].agent_learn, args=(RLSYNC_obj,), name=f'DQN_{ix + 1}'))
+                # mp_pool[ix].daemon = True
+                mp_pool[ix].start()
+
+            # self.pbar_updater(RLSYNC_obj)
+            # while RLSYNC_obj.get_time_step() <= RLSYNC_obj.get_total_time_steps():
+            #     pbar.n = RLSYNC_obj.get_time_step()
+            #     pbar.refresh()
+            # pbar.close()
+            # for ix in range(len(mp_pool)):
+            #     mp_pool[ix].join()
+            # for ix in range(0, len(self.agents_base)):
+            #     self.agents_base[ix].stop_running = True
+            # for ix in range(1, len(self.agents_base)):
+            #     self.agents_base[ix].stop_running = True
+            #     mp_pool[ix].join()
+            # if mp_pool[ix].is_alive():
+            #     mp_pool[ix].terminate()
+            # mp_pool[ix].terminate()
 
     def save_movie_gif(self, gif_path_filename: str, weights_path_filename: Union[str, None] = None):
         if weights_path_filename is not None:
@@ -127,11 +152,19 @@ class RLDQN(RLBase):
         print('Episode length:', episode_length)
         print('Episode reward:', episode_reward)
 
+    def save(self, path_filename: str):
+        _temp_agent = DQNAgent(env, seed=self.seed, device=self.agents_devices[0])
+        _temp_agent.setup_agent(RLSYNC_obj)
+        _temp_agent.get_weights_from_rlsync()
+        _temp_agent.save(path_filename)
+
     def learning_curve(self):
         pic_length = 15
-        window_size = max(int(len(self.total_rewards)/10_000), 5)
-        moving_avg_rewards = np.convolve(self.total_rewards, np.ones(window_size) / window_size, mode='valid')
-        moving_avg_lengths = np.convolve(self.episodes_length, np.ones(window_size) / window_size, mode='valid')
+        window_size = max(int(len(RLSYNC_obj.episodes_rewards) / 10_000), 5)
+        moving_avg_rewards = np.convolve(RLSYNC_obj.episodes_rewards, np.ones(window_size) / window_size,
+                                         mode='valid')
+        moving_avg_lengths = np.convolve(RLSYNC_obj.episodes_length, np.ones(window_size) / window_size,
+                                         mode='valid')
 
         plt.figure(figsize=(pic_length, 10))
         plt.title('Rewards')
@@ -144,7 +177,8 @@ class RLDQN(RLBase):
 
 
 if __name__ == '__main__':
-    frames_to_learn = 500_000
+    # mp.set_start_method("spawn")
+    frames_to_learn = 3_000
     env = gym.make("LunarLander-v2",
                    render_mode=None,
                    continuous=False,
@@ -154,6 +188,6 @@ if __name__ == '__main__':
                    turbulence_power=1.5,
                    )
 
-    rl = RLDQN(env, agents_num=1, agents_devices=['cuda', ])
+    rl = RLDQN(env, agents_num=2, agents_devices=['cpu', 'cpu'])
     rl.learn(frames_to_learn)
-    rl.save(f'./simpledqqn_{frames_to_learn}.pth')
+    # rl.save(f'./simpledqqn_{frames_to_learn}.pth')

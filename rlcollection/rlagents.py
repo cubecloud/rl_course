@@ -1,6 +1,8 @@
 import copy
 import math
 import random
+import time
+
 import imageio
 
 import numpy as np
@@ -12,9 +14,9 @@ import torch.optim as optim
 from rlcollection.rlnetworks import FCnet
 from rlcollection.replaybuffer import Transition
 from rlcollection.configdqn import ConfiqDQN
-from rlcollection.rlsync import SYNC_obj
+from rlcollection.rlsync import RlSync
 
-__version__ = 0.010
+__version__ = 0.011
 
 
 class DQNAgent:
@@ -37,18 +39,22 @@ class DQNAgent:
         random.seed(self.seed)
 
         #   setting shared mp or multithreaded variables through SYNC_obj
-        self.memory = SYNC_obj.memory
-        self.memory.buffer_resize(ConfiqDQN.BUFFER_SIZE)
+        self.RLSYNC_obj = None
+        self.memory = None
 
         self.state_size = len(self.env.observation_space.high)
         self.n_actions = self.env.action_space.n
         self.policy_net = None
         self.target_net = None
         self.optimizer = None
-        if device == 'cuda':
-            with SYNC_obj.lock:
-                self.net_init(self.net_model, self.net_model)
-        else:
+        self.stop_running = False
+
+    def setup_agent(self, rlsync_obj):
+        #   setting shared mp or multithreaded variables through SYNC_obj
+        self.RLSYNC_obj = rlsync_obj
+        self.memory = self.RLSYNC_obj.memory
+        self.memory.buffer_resize(ConfiqDQN.BUFFER_SIZE)
+        with self.RLSYNC_obj.lock:
             self.net_init(self.net_model, self.net_model)
 
     def net_init(self, policy_net, target_net):
@@ -68,15 +74,14 @@ class DQNAgent:
         """
         # Epsilon greedy action selection
         eps_threshold = ConfiqDQN.EPS_END + (ConfiqDQN.EPS_START - ConfiqDQN.EPS_END) * math.exp(
-            -1. * SYNC_obj.sync_time_step / ConfiqDQN.EPS_DECAY)
+            -1. * self.RLSYNC_obj.get_time_step() / ConfiqDQN.EPS_DECAY)
 
         # update the timesteps
-        with SYNC_obj.lock:
-            SYNC_obj.sync_time_step += 1
+        self.RLSYNC_obj.add_time_step()
 
         if random.random() > eps_threshold:
             if self.device == 'cuda':
-                with SYNC_obj.lock:
+                with self.RLSYNC_obj.lock:
                     return self.get_action(state)
             else:
                 return self.get_action(state)
@@ -158,7 +163,7 @@ class DQNAgent:
             self.optimizer.step()
 
         if self.device == 'cuda':
-            with SYNC_obj.lock:
+            with self.RLSYNC_obj.lock:
                 calc_gradient_algo(s_batch, a_batch, r_batch)
         else:
             calc_gradient_algo(s_batch, a_batch, r_batch)
@@ -175,15 +180,28 @@ class DQNAgent:
 
     def soft_update(self):
         """  Soft update model parameters """
-        if SYNC_obj.sync_time_step % ConfiqDQN.SYNC_FRAME == 0:
+        if self.RLSYNC_obj.get_time_step() % ConfiqDQN.SYNC_FRAME == 0:
             # θ′ ← τ θ + (1 −τ )θ′
             if self.device == 'cuda':
-                with SYNC_obj.lock:
+                with self.RLSYNC_obj.lock:
                     self.target_net_update()
             else:
                 self.target_net_update()
 
-    def agent_learn(self) -> tuple:
+    def agent_learn(self, rlsync_obj):
+        self.setup_agent(rlsync_obj)
+        print(f'Setup agent #{self.id_num}')
+        while not self.stop_running:
+            episode_reward, episode_length = self.episode_learn()
+            # print(episode_reward, episode_length)
+            self.RLSYNC_obj.append_episodes_rewards(episode_reward)
+            self.RLSYNC_obj.append_episodes_length(episode_length)
+        print(f'Process #{self.id_num} - exiting')
+        time.sleep(2)
+        if self.id_num == 1:
+            self.RLSYNC_obj.set_net_weights(self.policy_net.state_dict())
+
+    def episode_learn(self) -> tuple:
         episode_reward = 0
 
         # Для каждого эпизода инициализируем начальное состояние
@@ -219,6 +237,13 @@ class DQNAgent:
 
         if len(self.memory) > ConfiqDQN.BATCH_SIZE:
             self.optimize_model(ConfiqDQN.BATCH_SIZE)
+
+    def get_weights_from_rlsync(self):
+        self.policy_net.load_state_dict(self.RLSYNC_obj.get_net_weights(), map_location=self.device)
+        self.target_net.load_state_dict(self.policy_net.state_dict())
+
+    def save_weights_to_rlsync(self):
+        self.RLSYNC_obj.set_net_weights(self.policy_net.state_dict())
 
     def save(self, path_filename: str):
         torch.save(self.policy_net.state_dict(), path_filename)
