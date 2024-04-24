@@ -36,9 +36,8 @@ class DQNAgent:
         self.net_model = net_model
         random.seed(self.seed)
 
-        #   setting shared mp or multithreaded variables through RLSYNC_obj
-        self.memory = RLSYNC_obj.memory
-        self.memory.buffer_resize(ConfiqDQN.BUFFER_SIZE)
+        self.__RLSYNC_obj = None
+        self.memory = None
 
         self.state_size = len(self.env.observation_space.high)
         self.n_actions = self.env.action_space.n
@@ -48,10 +47,22 @@ class DQNAgent:
         self.optimizer = None
         self.l1_cache_size = ConfiqDQN.BATCH_SIZE * 3
         self.l1_cache: list = []
+
+
+    @property
+    def RLSYNC_obj(self):
+        return self.__RLSYNC_obj
+
+    @RLSYNC_obj.setter
+    def RLSYNC_obj(self, obj):
+        self.__RLSYNC_obj = obj
+        #   setting shared mp or multithreaded variables through RLSYNC_obj
+        self.memory = self.__RLSYNC_obj.memory
+        self.memory.buffer_resize(ConfiqDQN.BUFFER_SIZE)
         self.net_init(self.net_model, self.net_model)
 
     def net_init(self, policy_net, target_net):
-        with RLSYNC_obj.lock:
+        with self.__RLSYNC_obj.lock:
             self.policy_net = policy_net(self.state_size, self.n_actions, self.seed).to(self.device)
             self.target_net = target_net(self.state_size, self.n_actions, self.seed).to(self.device)
             self.target_net.load_state_dict(self.policy_net.state_dict())
@@ -69,11 +80,11 @@ class DQNAgent:
         """
         # Epsilon greedy action selection
         eps_threshold = ConfiqDQN.EPS_END + (ConfiqDQN.EPS_START - ConfiqDQN.EPS_END) * math.exp(
-            -1. * RLSYNC_obj.sync_time_step / ConfiqDQN.EPS_DECAY)
+            -1. * self.RLSYNC_obj.sync_time_step / ConfiqDQN.EPS_DECAY)
 
         # update the timesteps
-        with RLSYNC_obj.lock:
-            RLSYNC_obj.sync_time_step += 1
+        with self.RLSYNC_obj.lock:
+            self.RLSYNC_obj.sync_time_step += 1
 
         if random.random() > eps_threshold:
             return self.get_action(state)
@@ -154,57 +165,61 @@ class DQNAgent:
 
             self.optimizer.step()
 
-        with RLSYNC_obj.lock:
-            calc_gradient_algo(_s_batch, _a_batch, _r_batch)
+        calc_gradient_algo(_s_batch, _a_batch, _r_batch)
         # update target net if necessary
         self.soft_update()
 
     def target_net_update(self):
-        with RLSYNC_obj.lock:
-            policy_net_state_dict = self.policy_net.state_dict()
-            target_net_state_dict = self.target_net.state_dict()
+        policy_net_state_dict = self.policy_net.state_dict()
+        target_net_state_dict = self.target_net.state_dict()
         for key in policy_net_state_dict:
             target_net_state_dict[key] = policy_net_state_dict[key] * ConfiqDQN.TAU + target_net_state_dict[
                 key] * (1 - ConfiqDQN.TAU)
-        with RLSYNC_obj.lock:
-            self.target_net.load_state_dict(target_net_state_dict)
+        self.target_net.load_state_dict(target_net_state_dict)
 
     def agents_net_updates(self):
-        agents_lst = list(range(RLSYNC_obj.agents_running))
+        agents_lst = list(range(self.RLSYNC_obj.agents_running))
         agents_lst.remove(self.id_num)
 
-        with RLSYNC_obj.lock:
-            local_policy_net_state_dict = self.policy_net.state_dict()
-            local_target_net_state_dict = self.target_net.state_dict()
+        local_policy_net_state_dict = self.policy_net.state_dict()
+        local_target_net_state_dict = self.target_net.state_dict()
 
         for agent_id in agents_lst:
             self.load_transfer_weights(agent_id)
-            with RLSYNC_obj.lock:
-                other_policy_net_state_dict = self.policy_net.state_dict()
-                other_target_net_state_dict = self.target_net.state_dict()
+            other_policy_net_state_dict = self.policy_net.state_dict()
+            other_target_net_state_dict = self.target_net.state_dict()
             for key in other_policy_net_state_dict:
                 local_policy_net_state_dict[key] = other_policy_net_state_dict[key] * ConfiqDQN.TAU + \
                                                    local_policy_net_state_dict[key] * (1 - ConfiqDQN.TAU)
-            with RLSYNC_obj.lock:
-                self.policy_net.load_state_dict(local_policy_net_state_dict)
+            self.policy_net.load_state_dict(local_policy_net_state_dict)
 
             for key in other_target_net_state_dict:
                 local_target_net_state_dict[key] = other_target_net_state_dict[key] * ConfiqDQN.TAU + \
                                                    local_target_net_state_dict[key] * (1 - ConfiqDQN.TAU)
-            with RLSYNC_obj.lock:
-                self.target_net.load_state_dict(local_target_net_state_dict)
+            self.target_net.load_state_dict(local_target_net_state_dict)
 
     def soft_update(self):
         """  Soft update model parameters """
-        if RLSYNC_obj.sync_time_step % ConfiqDQN.SYNC_FRAME == 0:
+        if self.RLSYNC_obj.sync_time_step % ConfiqDQN.SYNC_FRAME == 0:
             # θ′ ← τ θ + (1 −τ )θ′
             self.target_net_update()
-        if RLSYNC_obj.agents_running > 1 and RLSYNC_obj.sync_time_step >= ConfiqDQN.AGENTS_SYNC_FRAME - random.randint(
-                0, 10):
+        if (self.RLSYNC_obj.agents_running > 1) and (self.RLSYNC_obj.sync_time_step >= ConfiqDQN.AGENTS_SYNC_FRAME):
             self.save_transfer_weights()
-            if RLSYNC_obj.sync_time_step % ConfiqDQN.AGENTS_SYNC_FRAME == 0:
+            if self.RLSYNC_obj.sync_time_step % ConfiqDQN.AGENTS_SYNC_FRAME == 0:
                 # θ′ ← τ θ + (1 −τ )θ′
                 self.agents_net_updates()
+
+    def agent_learn(self, rlsync_obj=None):
+        if rlsync_obj is None:
+            self.RLSYNC_obj = RLSYNC_obj
+        else:
+            self.RLSYNC_obj = rlsync_obj
+
+        while self.RLSYNC_obj.sync_time_step <= self.RLSYNC_obj.sync_total_time_steps:
+            episode_reward, episode_length = self.episode_learn()
+            with self.RLSYNC_obj.lock:
+                self.RLSYNC_obj.episodes_rewards.append(episode_reward)
+                self.RLSYNC_obj.episodes_length.append(episode_length)
 
     def episode_learn(self) -> tuple:
         episode_reward = 0
@@ -237,8 +252,9 @@ class DQNAgent:
         return episode_reward, frame_idx + 1
 
     def step(self, state, action, reward, next_state, flush=False):
+        # Creating L1 cache to unsync agents with replay buffer
         self.l1_cache.append([state, action, reward, next_state])
-        if flush or (RLSYNC_obj.sync_time_step % self.l1_cache_size == 0):
+        if flush or (len(self.l1_cache) >= random.randint(ConfiqDQN.BATCH_SIZE, self.l1_cache_size)):
             self.memory.extend([Transition(*element) for element in self.l1_cache])
             self.l1_cache.clear()
 
@@ -262,11 +278,9 @@ class DQNAgent:
             temp_buffer.seek(0)
             return torch.load(temp_buffer, map_location=self.device)
 
-        __weights = RLSYNC_obj.get_weights(agent_id)
-        with RLSYNC_obj.lock:
-            self.policy_net.load_state_dict(prepared_for_device(__weights[0]))
-        with RLSYNC_obj.lock:
-            self.target_net.load_state_dict(prepared_for_device(__weights[1]))
+        __weights = self.RLSYNC_obj.get_weights(agent_id)
+        self.policy_net.load_state_dict(prepared_for_device(__weights[0]))
+        self.target_net.load_state_dict(prepared_for_device(__weights[1]))
 
     def save_movie_gif(self, gif_path_filename: str):
         frames = []

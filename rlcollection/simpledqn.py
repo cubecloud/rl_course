@@ -148,15 +148,14 @@ class RLDQN(RLBase):
             pbar.refresh()
             pbar.close()
 
+        # def check_constraint(rlsync_obj):
+        #     return rlsync_obj.sync_time_step <= rlsync_obj.sync_total_time_steps
+
         def agent_thread(idx: int, rlsync_obj):
-            while rlsync_obj.sync_time_step <= rlsync_obj.sync_total_time_steps:
-                try:
-                    episode_reward, episode_length = self.agents_base[idx].episode_learn()
-                    with rlsync_obj.lock:
-                        self.episodes_rewards.append(episode_reward)
-                        self.episodes_length.append(episode_length)
-                except (KeyboardInterrupt, SystemExit):
-                    pass
+            try:
+                self.agents_base[idx].agent_learn(rlsync_obj=rlsync_obj)
+            except (KeyboardInterrupt, SystemExit):
+                pass
 
         threads_lst: list = []
         for ix in range(len(self.agents_base)):
@@ -170,6 +169,9 @@ class RLDQN(RLBase):
         for thread in threads_lst:
             thread.join()
 
+        self.episodes_rewards = RLSYNC_obj.episodes_rewards
+        self.episodes_length = RLSYNC_obj.episodes_length
+
 
 if __name__ == '__main__':
     frames_to_learn = 50_000
@@ -182,7 +184,7 @@ if __name__ == '__main__':
                    turbulence_power=1.5,
                    )
 
-    rl = RLDQN(env, DQNAgent,  agents_num=4, agents_devices=['cuda', 'cuda', 'cuda', 'cpu'])
+    rl = RLDQN(env, DQNAgent, agents_num=1, agents_devices=['cuda', ])
     rl.learn(frames_to_learn)
     rl.save(f'./simpledqqn_{frames_to_learn}.pth')
     rl.learning_curve()
