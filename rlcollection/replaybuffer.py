@@ -1,11 +1,8 @@
 import random
-import threading
+from rlcollection.rlmutex import threads_lock
 from collections import namedtuple, deque
 
-threads_lock = threading.Lock()
-
-
-__version__ = 0.001
+__version__ = 0.003
 
 Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward'))
 
@@ -20,21 +17,18 @@ class ReplayBuffer:
         if self.capacity != new_capacity:
             with threads_lock:
                 new_memory = deque([], maxlen=new_capacity)
-                if new_capacity > self.capacity and new_capacity >= self.__len__():
+                if new_capacity > self.capacity or (self.capacity > new_capacity > self.__len__()):
                     new_memory.extend(self.memory)
-                elif new_capacity > self.capacity and new_capacity < self.__len__():
-                    new_memory.extend(self.memory[:self.__len__()])
                 elif new_capacity < self.capacity and new_capacity <= self.__len__():
                     new_memory.extend(self.memory[self.__len__() - new_capacity:])
-                elif new_capacity < self.capacity and new_capacity > self.__len__():
-                    new_memory.extend(self.memory)
                 self.memory.clear()
                 self.memory = new_memory
                 self.capacity = new_capacity
 
     def add(self, *args):
         """ Save a transition (state, action, next_state, reward) """
-        self.memory.append(Transition(*args))
+        with threads_lock:
+            self.memory.append(Transition(*args))
 
     def push(self, *args):
         """ Save a transition (state, action, next_state, reward) """
@@ -43,8 +37,16 @@ class ReplayBuffer:
     def sample(self, batch_size):
         return random.sample(self.memory, batch_size)
 
+    def extend(self, batch_list):
+        with threads_lock:
+            self.memory.extend(batch_list)
+
     def __len__(self):
         return len(self.memory)
+
+    def clear(self):
+        with threads_lock:
+            self.memory.clear()
 
 
 if __name__ == '__main__':
