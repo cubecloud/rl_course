@@ -45,9 +45,8 @@ class DQNAgent:
         self.target_net = None
         self.proxy_net = None
         self.optimizer = None
-        self.l1_cache_size = ConfiqDQN.BATCH_SIZE * 3
+        self.l1_cache_size = ConfiqDQN.BATCH_SIZE * 4
         self.l1_cache: list = []
-
 
     @property
     def RLSYNC_obj(self):
@@ -78,13 +77,18 @@ class DQNAgent:
         Returns:
             action:     action
         """
-        # Epsilon greedy action selection
-        eps_threshold = ConfiqDQN.EPS_END + (ConfiqDQN.EPS_START - ConfiqDQN.EPS_END) * math.exp(
-            -1. * self.RLSYNC_obj.sync_time_step / ConfiqDQN.EPS_DECAY)
 
-        # update the timesteps
-        with self.RLSYNC_obj.lock:
-            self.RLSYNC_obj.sync_time_step += 1
+        eps_threshold = ConfiqDQN.EPS_END + (ConfiqDQN.EPS_START - ConfiqDQN.EPS_END) * math.exp(
+            -1. * self.RLSYNC_obj.get_time_step() / ConfiqDQN.EPS_DECAY)
+
+        # New Epsilon calculation based on cos, pi, total_time_steps and time_step, warmup 30% of total_time_steps
+        # formula = ConfiqDQN.EPS_END + 0.5 * (ConfiqDQN.EPS_START - ConfiqDQN.EPS_END) * (1 + math.cos(
+        #     (self.__RLSYNC_obj.get_time_step() + 1) * math.pi / (max(
+        #         self.__RLSYNC_obj.get_total_time_steps() - int(self.__RLSYNC_obj.get_total_time_steps() * 0.5), 1))))
+        # eps_threshold = max(formula, ConfiqDQN.EPS_END)
+
+        # update the timesteps +1
+        self.RLSYNC_obj.add_time_step()
 
         if random.random() > eps_threshold:
             return self.get_action(state)
@@ -178,7 +182,7 @@ class DQNAgent:
         self.target_net.load_state_dict(target_net_state_dict)
 
     def agents_net_updates(self):
-        agents_lst = list(range(self.RLSYNC_obj.agents_running))
+        agents_lst = list(range(self.RLSYNC_obj.get_agents_running()))
         agents_lst.remove(self.id_num)
 
         local_policy_net_state_dict = self.policy_net.state_dict()
@@ -200,12 +204,13 @@ class DQNAgent:
 
     def soft_update(self):
         """  Soft update model parameters """
-        if self.RLSYNC_obj.sync_time_step % ConfiqDQN.SYNC_FRAME == 0:
+        if self.RLSYNC_obj.get_time_step() % ConfiqDQN.SYNC_FRAME == 0:
             # θ′ ← τ θ + (1 −τ )θ′
             self.target_net_update()
-        if (self.RLSYNC_obj.agents_running > 1) and (self.RLSYNC_obj.sync_time_step >= ConfiqDQN.AGENTS_SYNC_FRAME):
-            self.save_transfer_weights()
-            if self.RLSYNC_obj.sync_time_step % ConfiqDQN.AGENTS_SYNC_FRAME == 0:
+        if self.RLSYNC_obj.get_agents_running() > 1:
+            if self.RLSYNC_obj.get_time_step() % ConfiqDQN.AGENTS_SYNC_FRAME == 0:
+                self.save_transfer_weights()
+            elif self.RLSYNC_obj.get_time_step() % (ConfiqDQN.AGENTS_SYNC_FRAME + self.id_num) == 0:
                 # θ′ ← τ θ + (1 −τ )θ′
                 self.agents_net_updates()
 
@@ -215,11 +220,10 @@ class DQNAgent:
         else:
             self.RLSYNC_obj = rlsync_obj
 
-        while self.RLSYNC_obj.sync_time_step <= self.RLSYNC_obj.sync_total_time_steps:
+        while self.RLSYNC_obj.get_time_step() <= self.RLSYNC_obj.get_total_time_steps():
             episode_reward, episode_length = self.episode_learn()
-            with self.RLSYNC_obj.lock:
-                self.RLSYNC_obj.episodes_rewards.append(episode_reward)
-                self.RLSYNC_obj.episodes_length.append(episode_length)
+            self.RLSYNC_obj.append_episodes_rewards(episode_reward)
+            self.RLSYNC_obj.append_episodes_length(episode_length)
 
     def episode_learn(self) -> tuple:
         episode_reward = 0
@@ -265,6 +269,9 @@ class DQNAgent:
         torch.save(self.policy_net.state_dict(), path_filename)
 
     def load(self, path_filename: str):
+        if self.RLSYNC_obj is None:
+            self.RLSYNC_obj = RLSYNC_obj
+
         self.policy_net.load_state_dict(torch.load(path_filename, map_location=self.device))
         self.target_net.load_state_dict(self.policy_net.state_dict())
 

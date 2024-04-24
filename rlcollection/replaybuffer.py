@@ -1,8 +1,8 @@
 import random
-from rlcollection.rlmutex import threads_lock
+from rlcollection.rlmutex import rlmutex
 from collections import namedtuple, deque
 
-__version__ = 0.003
+__version__ = 0.004
 
 Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward'))
 
@@ -15,7 +15,7 @@ class ReplayBuffer:
 
     def buffer_resize(self, new_capacity: int):
         if self.capacity != new_capacity:
-            with threads_lock:
+            with rlmutex:
                 new_memory = deque([], maxlen=new_capacity)
                 if new_capacity > self.capacity or (self.capacity > new_capacity > self.__len__()):
                     new_memory.extend(self.memory)
@@ -27,7 +27,7 @@ class ReplayBuffer:
 
     def add(self, *args):
         """ Save a transition (state, action, next_state, reward) """
-        with threads_lock:
+        with rlmutex:
             self.memory.append(Transition(*args))
 
     def push(self, *args):
@@ -38,14 +38,14 @@ class ReplayBuffer:
         return random.sample(self.memory, batch_size)
 
     def extend(self, batch_list):
-        with threads_lock:
+        with rlmutex:
             self.memory.extend(batch_list)
 
     def __len__(self):
         return len(self.memory)
 
     def clear(self):
-        with threads_lock:
+        with rlmutex:
             self.memory.clear()
 
 

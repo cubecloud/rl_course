@@ -76,11 +76,11 @@ class RLBase:
             self.agents_base.append(self.agent(self.env, seed=self.seed, device=device))
 
     def save_movie_gif(self, gif_path_filename: str, weights_path_filename: Union[str, None] = None):
-        if not self.agents_base:
-            self.agents_init()
+        self.agents_init()
 
         if weights_path_filename is not None:
             self.agents_base[0].load(weights_path_filename)
+
         episode_reward, episode_length = self.agents_base[0].save_movie_gif(gif_path_filename)
         print('Episode length:', episode_length)
         print('Episode reward:', episode_reward)
@@ -135,21 +135,18 @@ class RLDQN(RLBase):
         self.agents_init()
         self.total_timesteps = total_timesteps
 
-        if RLSYNC_obj.sync_total_time_steps == 0 or RLSYNC_obj.sync_total_time_steps != total_timesteps:
-            RLSYNC_obj.sync_total_time_steps = total_timesteps
+        if RLSYNC_obj.get_total_time_steps() == 0 or RLSYNC_obj.get_total_time_steps() != total_timesteps:
+            RLSYNC_obj.set_total_time_steps(total_timesteps)
 
         def pbar_updater(rlsync_obj):
-            pbar = tqdm(total=int(rlsync_obj.sync_total_time_steps))
-            while rlsync_obj.sync_time_step <= rlsync_obj.sync_total_time_steps:
-                pbar.n = rlsync_obj.sync_time_step
+            pbar = tqdm(total=int(rlsync_obj.get_total_time_steps()))
+            while rlsync_obj.get_time_step() <= rlsync_obj.get_total_time_steps():
+                pbar.n = rlsync_obj.get_time_step()
                 pbar.refresh()
                 time.sleep(.7)
-            pbar.n = RLSYNC_obj.sync_time_step
+            pbar.n = RLSYNC_obj.get_time_step()
             pbar.refresh()
             pbar.close()
-
-        # def check_constraint(rlsync_obj):
-        #     return rlsync_obj.sync_time_step <= rlsync_obj.sync_total_time_steps
 
         def agent_thread(idx: int, rlsync_obj):
             try:
@@ -161,20 +158,19 @@ class RLDQN(RLBase):
         for ix in range(len(self.agents_base)):
             threads_lst.append(Thread(target=agent_thread, args=(ix, RLSYNC_obj), name=f'DQN_{ix}'))
             threads_lst[-1].start()
-            with RLSYNC_obj.lock:
-                RLSYNC_obj.agents_running += 1
+            RLSYNC_obj.add_agents_running()
 
         threads_lst.append(Thread(target=pbar_updater, args=(RLSYNC_obj,), name=f'pbar'))
         threads_lst[-1].start()
         for thread in threads_lst:
             thread.join()
 
-        self.episodes_rewards = RLSYNC_obj.episodes_rewards
-        self.episodes_length = RLSYNC_obj.episodes_length
+        self.episodes_rewards = RLSYNC_obj.get_episodes_rewards()
+        self.episodes_length = RLSYNC_obj.get_episodes_length()
 
 
 if __name__ == '__main__':
-    frames_to_learn = 50_000
+    frames_to_learn = 100_000
     env = gym.make("LunarLander-v2",
                    render_mode=None,
                    continuous=False,
