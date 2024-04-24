@@ -19,6 +19,8 @@ class RlSync(SingletonClass):
     memory = ReplayBuffer()
     lock = threads_lock
     net_weights: dict = {}
+    episodes_rewards: list = []
+    episodes_length: list = []
 
     @classmethod
     def get_weights(cls, agent_id):
@@ -34,7 +36,6 @@ class RlSync(SingletonClass):
         cls.sync_total_time_steps: int = 0
         cls.sync_time_step: int = 0
         cls.memory = ReplayBuffer()
-        cls.condition = threads_condition
         cls.net_weights: dict = {}
 
 
