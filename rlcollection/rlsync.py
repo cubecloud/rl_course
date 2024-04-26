@@ -1,11 +1,13 @@
+import logging
 from rlcollection.rlmutex import rlmutex
 from rlcollection.replaybuffer import ReplayBuffer
 
 __version__ = 0.013
 
+logger = logging.getLogger()
+
 
 class SingletonClass(object):
-
     def __new__(cls):
         if not hasattr(cls, 'instance'):
             cls.instance = super(SingletonClass, cls).__new__(cls)
@@ -16,6 +18,8 @@ class RlSync(SingletonClass):
     __agents_running: int = 0
     __total_time_steps: int = 0
     __time_step: int = 0
+    __total_episodes: int = 0
+    __episode_num: int = 0
     __net_weights: dict = {}
     __episodes_rewards: list = []
     __episodes_length: list = []
@@ -26,8 +30,12 @@ class RlSync(SingletonClass):
         cls.__agents_running = 0
         cls.__total_time_steps = 0
         cls.__time_step = 0
+        cls.__total_episodes: int = 0
+        cls.__episode_num: int = 0
         cls.__net_weights: dict = {}
-        cls.memory = ReplayBuffer()
+        cls.__episodes_rewards: list = []
+        cls.__episodes_length: list = []
+        cls.memory.clear()
 
     def add_agents_running(cls):
         if cls.__agents_running > 0:
@@ -40,14 +48,32 @@ class RlSync(SingletonClass):
         return cls.__agents_running
 
     def add_time_step(cls):
-        if cls.__agents_running > 1:
-            with cls.lock:
-                cls.__time_step += 1
-        else:
+        with cls.lock:
             cls.__time_step += 1
+
+    def add_time_steps(cls, value):
+        with cls.lock:
+            cls.__time_step += value
 
     def get_time_step(cls):
         return cls.__time_step
+
+    def add_episode_num(cls):
+        with cls.lock:
+            cls.__episode_num += 1
+
+    def get_episode_num(cls):
+        return cls.__episode_num
+
+    def set_total_episodes(cls, value):
+        if cls.__agents_running > 1:
+            with cls.lock:
+                cls.__total_episodes = value
+        else:
+            cls.__total_episodes = value
+
+    def get_total_episodes(cls):
+        return cls.__total_episodes
 
     def set_total_time_steps(cls, value):
         if cls.__agents_running > 1:
@@ -59,13 +85,17 @@ class RlSync(SingletonClass):
     def get_total_time_steps(cls):
         return cls.__total_time_steps
 
-    def append_episodes_rewards(cls, value):
+    def append_episodes_rewards(cls, value, id_num):
         with cls.lock:
+            # logger.debug(f'append_episodes_rewards {id_num} setting the lock')
             cls.__episodes_rewards.append(value)
+        # logger.debug(f'append_episodes_rewards {id_num} release the lock')
 
-    def append_episodes_length(cls, value):
+    def append_episodes_length(cls, value, id_num):
         with cls.lock:
+            # logger.debug(f'append_episodes_length {id_num} setting the lock')
             cls.__episodes_length.append(value)
+        # logger.debug(f'append_episodes_length {id_num} release the lock')
 
     def get_episodes_rewards(cls):
         return cls.__episodes_rewards

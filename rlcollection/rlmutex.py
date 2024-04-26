@@ -1,4 +1,3 @@
 import threading
 
-rlmutex = threading.Lock()
-
+rlmutex = threading.RLock()

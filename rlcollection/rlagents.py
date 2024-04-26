@@ -3,6 +3,7 @@ import copy
 import math
 import random
 import imageio
+
 import numpy as np
 from itertools import count
 
@@ -14,12 +15,44 @@ from rlcollection.replaybuffer import Transition
 from rlcollection.configdqn import ConfiqDQN
 from rlcollection.rlsync import RLSYNC_obj
 
-__version__ = 0.013
+__version__ = 0.014
 
 
-class DQNAgent:
+class AgentMeta:
+    def __init__(self, env, seed, device='cpu', net_model=FCnet):
+        """
+        Args:
+            env:            initialized environment class
+            seed (int):     random seed
+        """
+
+        self.device = device
+        self.env = None
+        self.n_actions = None
+        self.state_size = None
+        self.set_env(env)
+
+        self.seed: int = seed
+        self.net_model = net_model
+        random.seed(self.seed)
+        self.memory = None
+        self.policy_net = None
+        self.target_net = None
+        self.optimizer = None
+        self.condition = None
+        self.l1_cache_size = ConfiqDQN.BATCH_SIZE * 4
+        self.l1_cache: list = []
+        self.local_timestep: int = 0
+
+    def set_env(self, env):
+        self.env = copy.deepcopy(env)
+        self.state_size = len(self.env.observation_space.high)
+        self.n_actions = self.env.action_space.n
+
+
+class DQNAgent(AgentMeta):
     """Interacts with and learns form environment."""
-    id_count: int = 0
+    id_count: int = -1
 
     def __init__(self, env, seed, device='cpu', net_model=FCnet):
         """
@@ -27,26 +60,14 @@ class DQNAgent:
             env:            initialized environment class
             seed (int):     random seed
         """
-        self.id_num = int(DQNAgent.id_count)
-        DQNAgent.id_count += 1
-
-        self.device = device
-        self.env = copy.deepcopy(env)
-        self.seed: int = seed
-        self.net_model = net_model
-        random.seed(self.seed)
-
+        super().__init__(env, seed, device, net_model)
         self.__RLSYNC_obj = None
-        self.memory = None
+        self.update_id_count()
+        self.id_num = int(self.id_count)
 
-        self.state_size = len(self.env.observation_space.high)
-        self.n_actions = self.env.action_space.n
-        self.policy_net = None
-        self.target_net = None
-        self.proxy_net = None
-        self.optimizer = None
-        self.l1_cache_size = ConfiqDQN.BATCH_SIZE * 4
-        self.l1_cache: list = []
+    @classmethod
+    def update_id_count(cls):
+        cls.id_count += 1
 
     @property
     def RLSYNC_obj(self):
@@ -87,9 +108,6 @@ class DQNAgent:
         #         self.__RLSYNC_obj.get_total_time_steps() - int(self.__RLSYNC_obj.get_total_time_steps() * 0.5), 1))))
         # eps_threshold = max(formula, ConfiqDQN.EPS_END)
 
-        # update the timesteps +1
-        self.RLSYNC_obj.add_time_step()
-
         if random.random() > eps_threshold:
             return self.get_action(state)
         else:
@@ -120,12 +138,8 @@ class DQNAgent:
         """
         experience = self.memory.sample(batch_size)
         batch = Transition(*zip(*experience))
-
         _non_final_mask = np.array(tuple(map(lambda s: s is not None, batch.next_state)))
         _non_final_next_states = np.array([s for s in batch.next_state if s is not None])
-        _s_batch = np.array(batch.state)
-        _a_batch = np.array(batch.action)
-        _r_batch = np.array(batch.reward)
 
         def calc_gradient_algo(state_batch, action_batch, reward_batch):
             # Вычислить маску нефинальных состояний и соединить элементы батча
@@ -136,9 +150,9 @@ class DQNAgent:
             t_non_final_next_states = torch.tensor(_non_final_next_states, device=self.device)
 
             # Собираем батчи для состояний, действий и наград
-            state_batch = torch.tensor(state_batch, dtype=torch.float32, device=self.device)
-            action_batch = torch.tensor(action_batch, dtype=torch.long, device=self.device)
-            reward_batch = torch.tensor(reward_batch, dtype=torch.float32, device=self.device)
+            state_batch = torch.as_tensor(state_batch, dtype=torch.float32, device=self.device)
+            action_batch = torch.as_tensor(action_batch, dtype=torch.long, device=self.device)
+            reward_batch = torch.as_tensor(reward_batch, dtype=torch.float32, device=self.device)
 
             # Вычислить Q(s_t, a) - модель вычисляет Q(s_t),
             # затем мы выбираем столбцы предпринятых действий.
@@ -169,7 +183,8 @@ class DQNAgent:
 
             self.optimizer.step()
 
-        calc_gradient_algo(_s_batch, _a_batch, _r_batch)
+        calc_gradient_algo(np.array(batch.state), np.array(batch.action), np.array(batch.reward))
+
         # update target net if necessary
         self.soft_update()
 
@@ -182,6 +197,12 @@ class DQNAgent:
         self.target_net.load_state_dict(target_net_state_dict)
 
     def agents_net_updates(self):
+        def state_dict_update(local_dict, other_dict):
+            for key in other_dict:
+                local_dict[key] = other_dict[key] * a_TAU + local_dict[key] * (1 - a_TAU)
+            return local_dict
+
+        a_TAU = ConfiqDQN.TAU * 7
         agents_lst = list(range(self.RLSYNC_obj.get_agents_running()))
         agents_lst.remove(self.id_num)
 
@@ -192,38 +213,36 @@ class DQNAgent:
             self.load_transfer_weights(agent_id)
             other_policy_net_state_dict = self.policy_net.state_dict()
             other_target_net_state_dict = self.target_net.state_dict()
-            for key in other_policy_net_state_dict:
-                local_policy_net_state_dict[key] = other_policy_net_state_dict[key] * ConfiqDQN.TAU + \
-                                                   local_policy_net_state_dict[key] * (1 - ConfiqDQN.TAU)
-            self.policy_net.load_state_dict(local_policy_net_state_dict)
-
-            for key in other_target_net_state_dict:
-                local_target_net_state_dict[key] = other_target_net_state_dict[key] * ConfiqDQN.TAU + \
-                                                   local_target_net_state_dict[key] * (1 - ConfiqDQN.TAU)
-            self.target_net.load_state_dict(local_target_net_state_dict)
+            self.policy_net.load_state_dict(state_dict_update(local_policy_net_state_dict, other_policy_net_state_dict))
+            self.target_net.load_state_dict(state_dict_update(local_target_net_state_dict, other_target_net_state_dict))
 
     def soft_update(self):
         """  Soft update model parameters """
-        if self.RLSYNC_obj.get_time_step() % ConfiqDQN.SYNC_FRAME == 0:
+        if self.local_timestep % ConfiqDQN.SYNC_FRAME == 0:
             # θ′ ← τ θ + (1 −τ )θ′
             self.target_net_update()
         if self.RLSYNC_obj.get_agents_running() > 1:
-            if self.RLSYNC_obj.get_time_step() % ConfiqDQN.AGENTS_SYNC_FRAME == 0:
+            if self.local_timestep % ConfiqDQN.AGENTS_SYNC_FRAME == 0:
                 self.save_transfer_weights()
-            elif self.RLSYNC_obj.get_time_step() % (ConfiqDQN.AGENTS_SYNC_FRAME + self.id_num) == 0:
+            elif self.local_timestep % ConfiqDQN.AGENTS_SYNC_FRAME == 0:
                 # θ′ ← τ θ + (1 −τ )θ′
                 self.agents_net_updates()
 
-    def agent_learn(self, rlsync_obj=None):
+    def agent_learn(self, rlsync_obj=None, constraint=None, condition='time_step'):
         if rlsync_obj is None:
             self.RLSYNC_obj = RLSYNC_obj
         else:
             self.RLSYNC_obj = rlsync_obj
+        self.condition = condition
+        self.RLSYNC_obj.add_agents_running()
 
-        while self.RLSYNC_obj.get_time_step() <= self.RLSYNC_obj.get_total_time_steps():
+        while constraint(self.RLSYNC_obj):
             episode_reward, episode_length = self.episode_learn()
-            self.RLSYNC_obj.append_episodes_rewards(episode_reward)
-            self.RLSYNC_obj.append_episodes_length(episode_length)
+            self.RLSYNC_obj.append_episodes_rewards(episode_reward, self.id_num)
+            self.RLSYNC_obj.append_episodes_length(episode_length, self.id_num)
+            self.RLSYNC_obj.add_episode_num()
+            if self.condition == 'episode':
+                self.RLSYNC_obj.add_time_steps(episode_length)
 
     def episode_learn(self) -> tuple:
         episode_reward = 0
@@ -248,6 +267,11 @@ class DQNAgent:
                 next_state = observation
             # making a step in learning
             self.step(state, [action], next_state, reward, flush=done)
+
+            # update the timesteps +1
+            # self.RLSYNC_obj.add_time_step()
+            self.local_timestep += 1
+
             # переходим на следующее состояние
             state = next_state
             if done:
