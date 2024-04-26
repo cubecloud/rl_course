@@ -7,7 +7,7 @@ __version__ = 0.003
 
 
 class FCnet(nn.Module):
-    def __init__(self, state_size: int, n_actions: int, seed: int = 42, l1_filters: int = 256, l2_filters: int = 256):
+    def __init__(self, state_size: int, n_actions: int, seed: int = 42, l1_filters: int = 512, l2_filters: int = 512):
         """
         Torch fully connected network
 
