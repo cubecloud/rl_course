@@ -1,7 +1,7 @@
 #PyCharm settings
 /.idea/*.*
 /.idea/
-
+TB/
 
 # Jupyter lab internal files
 .ipynb_checkpoints
