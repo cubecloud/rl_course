@@ -1,0 +1,19 @@
+class ConfigAgent:
+    ENV_NAME = "LunarLander-v2"
+    BUFFER_SIZE = 5_000    # replay buffer size
+    BATCH_SIZE = 4          # batch size
+    MASKED_ACTION = False
+    GAMMA = 0.99            # discount factor
+    SYNC = 2          # how often to update the target_network (frames) or sync every episode for A2C
+    AGENTS_SYNC = 3   # how often to update the networks between running agents (episode)
+    EPS_START = 0.00
+    EPS_END = 0.00
+    EPS_DECAY = 1_000_000
+    TAU = 1e-3
+    LR = 1e-3
+    EXPERIMENT_PATH = "./"
+    REWARD_CONDITION = 200
+    VALIDATION_STEP = 1000
+    VALIDATION_RATIO = 0.1
+    VALIDATION_EPS = 10
+    EVALUATION_EPS = 5
