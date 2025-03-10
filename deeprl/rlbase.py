@@ -13,18 +13,15 @@ from typing import List, Union
 
 from tqdm import tqdm
 
-# from rlcollection.configdqn_lunarlanderv2 import ConfigAgent
-# from rlcollection.configa2c_lunarlanderv2 import ConfigAgent
-# from rlcollection.configa2c_cartpolev1 import ConfigAgent
 from deeprl.rlsync import RLSYNC_obj
 from deeprl.rlagents import DQNAgent
 from deeprl.rlagents import A2CAgent
-from deeprl.rlagents import show_mp4, show_records
+from deeprl.rltools import show_mp4, show_records
 
 import matplotlib.pyplot as plt
 import pandas as pd
 
-__version__ = 0.025
+__version__ = 0.029
 
 TZ = timezone('Europe/Moscow')
 

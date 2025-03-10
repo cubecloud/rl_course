@@ -1,20 +1,19 @@
 import os
 import io
-import PIL
+
 import copy
 import math
 import json
 import random
-import imageio
+
 
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass, asdict
 
-import shutil as sh
-from glob import glob
+
 from itertools import count
-from base64 import b64encode
+
 from abc import abstractmethod
 
 import torch
@@ -29,6 +28,7 @@ from IPython.display import display, clear_output, HTML
 from deeprl.rlnetworks import FCnet, EMBEDnet, ActorNet
 from deeprl.replaybuffer import Transition
 from deeprl.rlsync import RLSYNC_obj
+from deeprl.rltools import saveanimation, save_mp4
 
 from gymnasium.spaces import Discrete, Box
 from gymnasium.wrappers import TransformObservation
