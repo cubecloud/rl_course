@@ -186,6 +186,7 @@ class TabularStochasticQAgent:
             if total_reward >= max_reward:
                 max_reward = total_reward
                 self.save_agent(f'{real_env_id}_agent.pkl')
+                self.virtual_env.save_virtual_environment(f'{real_env_id}_ve.pkl')
 
             writer.add_scalar("Reward/Total", total_reward, episode)
             writer.add_scalar("Learning rate", self.learning_rate, episode)
