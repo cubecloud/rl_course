@@ -1,3 +1,4 @@
+import os
 import datetime
 import numpy as np
 import pickle
@@ -8,7 +9,7 @@ from pytz import timezone
 
 TZ = timezone('Europe/Moscow')
 
-__version__ = 0.012
+__version__ = 0.013
 
 
 def get_exp_id() -> str:
@@ -17,36 +18,27 @@ def get_exp_id() -> str:
 
 class StochasticModel:
     def __init__(self, env):
-        self.real_env = env
-        self.num_states = self.real_env.observation_space.n
-        self.num_actions = self.real_env.action_space.n
+        self.env = env
+        self.num_states = self.env.observation_space.n
+        self.num_actions = self.env.action_space.n
         self.transition_counts = np.zeros((self.num_states, self.num_actions, self.num_states), dtype=np.int32)
 
     def step(self, state, action):
-        next_state, reward, terminated, truncated, info = self.real_env.step(action)
+        next_state, reward, terminated, truncated, info = self.env.step(action)
         self.update_transition_model(state, action, next_state)
         return next_state, reward, terminated, truncated, info
 
     def reset(self):
-        return self.real_env.reset()
+        return self.env.reset()
 
     def update_transition_model(self, state, action, next_state):
         self.transition_counts[state, action, next_state] += 1
 
-    def get_real_env(self):
-        return self.real_env
-
     def __getstate__(self):
-        return {
-            'transition_counts': self.transition_counts,
-            'num_states': self.num_states,
-            'num_actions': self.num_actions
-        }
+        return self.__dict__
 
     def __setstate__(self, state_dict):
-        self.transition_counts = state_dict['transition_counts']
-        self.num_states = state_dict['num_states']
-        self.num_actions = state_dict['num_actions']
+        self.__dict__.update(state_dict)
 
     def save_virtual_environment(self, filename):
         with open(filename, 'wb') as file:
@@ -62,14 +54,15 @@ class StochasticModel:
 
 
 class TabularStochasticQAgent:
-    def __init__(self, virtual_env, learning_rate=0.01, gamma=0.9, epsilon_start=1.0, epsilon_min=0.05):
+    def __init__(self, virtual_env, learning_rate=0.01, gamma=0.9, epsilon_start=1.0, epsilon_min=0.05, exp_path='./'):
         self.virtual_env = virtual_env
+        self.env = self.virtual_env.env
         self.learning_rate = learning_rate
         self.gamma = gamma
         self.epsilon_min = epsilon_min
         self.epsilon_start = epsilon_start
         self.epsilon = epsilon_start
-
+        self.exp_path = exp_path
         self.num_states = virtual_env.num_states
         self.num_actions = virtual_env.num_actions
 
@@ -110,7 +103,7 @@ class TabularStochasticQAgent:
 
     def select_action(self, state, info):
         if random.random() < self.epsilon:
-            return self.virtual_env.real_env.action_space.sample()
+            return self.env.action_space.sample()
         else:
             return self.get_action(state)
 
@@ -133,7 +126,7 @@ class TabularStochasticQAgent:
         # else
         # get max Q_value action
         if not np.any(weighted_q_values_with_action_weights):
-            return self.virtual_env.real_env.action_space.sample()
+            return self.env.action_space.sample()
         else:
             return np.argmax(weighted_q_values_with_action_weights)
 
@@ -154,9 +147,9 @@ class TabularStochasticQAgent:
         self.Q_table[state, action] += update_q
 
     def train(self, episodes=10000, truncate_steps=200, stats=100, tb_log='TB'):
-        real_env_id = self.virtual_env.real_env.spec.id
-        writer = SummaryWriter(
-            log_dir=f'{tb_log}/{real_env_id}{get_exp_id()}')  # init tensorboard SummaryWriter
+        real_env_id = self.env.spec.id
+        log_dir = os.path.join(self.exp_path, tb_log, f'{real_env_id}_{get_exp_id()}')
+        writer = SummaryWriter(log_dir=log_dir)  # init tensorboard SummaryWriter
 
         rewards = deque(maxlen=stats)
         max_reward = -np.inf
@@ -185,7 +178,7 @@ class TabularStochasticQAgent:
             # save best weights
             if total_reward >= max_reward:
                 max_reward = total_reward
-                self.save_agent(f'{real_env_id}_agent.pkl')
+                self.save_agent(os.path.join(self.exp_path, f'{real_env_id}_agent.pkl'))
 
             writer.add_scalar("Reward/Total", total_reward, episode)
             writer.add_scalar("Learning rate", self.learning_rate, episode)
@@ -203,6 +196,7 @@ class TabularStochasticQAgent:
         return self.__dict__
 
     def __setstate__(self, state_dict):
+
         self.__dict__.update(state_dict)
 
     def save_agent(self, filename):
