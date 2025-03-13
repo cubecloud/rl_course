@@ -11,7 +11,7 @@ class ConfigAgent:
     EPS_DECAY = 1_000_000
     TAU = 1e-3
     LR = 1e-3
-    EXPERIMENT_PATH = "./"
+    EXPERIMENT_PATH = "./deeprl/threaded/"
     REWARD_CONDITION = 200
     VALIDATION_STEP = 1000
     VALIDATION_RATIO = 0.1
