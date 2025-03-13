@@ -9,5 +9,5 @@ Create conda environment: ```conda env create --file "path to project"/rl_course
 3. Check "videos" directory in "path to project"/rl_course/tests/tabularrl/videos
 
 ### Deep RL with multithreaded agents with soft update between all agents with LunarLander-v2
-1. run [test_deeprl_threaded_dqn_lunarlanderv2.py](tests/test_deeprl_threaded_dqn_lunarlanderv2.py)
-2. 
+1. run [test_deeprl_threaded_dqn_lunarlanderv2.py](tests/test_deeprl_threaded_dqn_lunarlanderv2.py) WARNING! long training cycle ~3h
+2. or comment training cycle and uncomment evaluation with checkpoint weights
