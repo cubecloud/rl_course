@@ -7,7 +7,7 @@ import gymnasium as gym
 from deeprl.threaded.rlagents import DQNAgent
 from deeprl.threaded.rlbase import RLDQN
 
-__version__ = 0.041
+__version__ = 0.044
 
 TZ = timezone('Europe/Moscow')
 
@@ -29,3 +29,6 @@ if __name__ == '__main__':
            )
     rl.evaluate(5)
     rl.learning_curve(show_figure=False)
+
+    # uncomment for evaluation with checkpoint weights from exp-250312-172602 and checkpoint 12000
+    # rl.evaluate(5, use_checkpoint_dir='./deeprl/threaded/LunarLander-v2/DQN/exp-250312-172602/training/eps-12000')

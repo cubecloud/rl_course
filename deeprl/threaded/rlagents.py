@@ -549,7 +549,7 @@ class DQNAgent(AgentMeta):
 
     def step(self, current_state, action):
         observation, reward, terminated, truncated, info = self.env.step(action)
-        reward = self.transform_reward(current_state, observation, reward, terminated, truncated, info)
+        # reward = self.transform_reward(current_state, observation, reward, terminated, truncated, info)
         return observation, reward, terminated, truncated, info
 
     def episode_learn(self) -> Tuple[float, int]:
@@ -735,20 +735,18 @@ class A2CAgent(AgentMeta):
 
     def episode_learn(self) -> Tuple[float, int]:
         episode_reward = 0
-        # Для каждого эпизода инициализируем начальное состояние
         state, info = self.env.reset()
-        # frame_idx - считает сколько шагов успели сделать пока не закончился эпизод
+        # frame_idx - counting steps
         for frame_idx in count():
 
             action = self.select_action(state, info, eps_threshold=None)
 
-            # Делаем шаг агентом
+            # step
             observation, reward, terminated, truncated, info = self.step(state, action)
             episode_reward += reward
 
-            # Объединяем done по двум конечным состояниям
             done = terminated or truncated
-            # присваиваем следующее состояние
+            # next_state = observation if NOT terminated
             if terminated:
                 next_state = None
             else:
@@ -758,7 +756,7 @@ class A2CAgent(AgentMeta):
             self.RLSYNC_obj.add_time_step()
             self.local_timestep += 1
 
-            # making a step in train
+            # training step
             self.train_step(state, [action], next_state, reward, flush=done)
 
             state = next_state
@@ -799,9 +797,10 @@ class A2CAgent(AgentMeta):
         discounted_reward = 0
         for reward in episode_data.reward[::-1]:
             discounted_reward = reward + self.ConfigAgent.GAMMA * discounted_reward
-            cum_reward.insert(0, discounted_reward)
+            cum_reward.append(discounted_reward)
 
-        cum_reward = np.asarray(cum_reward)
+        # create reversed array cos of using append instead insert
+        cum_reward = np.asarray(cum_reward[::-1])
         cum_reward = (cum_reward - cum_reward.mean()) / (cum_reward.std())
 
         self.value_optimizer.zero_grad()
@@ -809,20 +808,20 @@ class A2CAgent(AgentMeta):
         states = torch.tensor(np.array(episode_data.state), dtype=torch.float32).to(self.device)
         cum_reward = torch.tensor(cum_reward, dtype=torch.float32).to(self.device)
 
-        # Вычисляем лосс
+        # Calculating loss for vf
         values = self.value_net(states)
         values = values.squeeze(dim=1)
         vf_loss = F.mse_loss(values, cum_reward, reduction="none")
-        # считаем градиенты
+        # calculating vf loss
         vf_loss.sum().backward()
-        # делаем шаг оптимизатора
+        # optimizer step
         self.value_optimizer.step()
 
-        # Оптимизируем policy loss (Actor)
+        # calculating optimized vf values
         with torch.no_grad():
             values = self.value_net(states)
 
-        # Обнуляем градиенты
+        # zero grad
         self.actor_optimizer.zero_grad()
         # преобразуем к тензорам
         actions = torch.tensor(episode_data.action, dtype=torch.long).to(self.device)
