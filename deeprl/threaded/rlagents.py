@@ -12,25 +12,35 @@ from dataclasses import dataclass, asdict
 
 from itertools import count
 
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 
 import torch
 import torch.optim as optim
 import torch.nn.functional as F
 
-from typing import Tuple, Union
+from typing import Tuple, Union, Dict, List, Callable, Optional
 
 from deeprl.threaded.rlnetworks import FCnet, EMBEDnet, ActorNet
 from deeprl.threaded.replaybuffer import Transition
 from deeprl.threaded.rlsync import RLSYNC_obj
 from deeprl.threaded.rltools import saveanimation, save_mp4, validate_episodes, play_and_save_mp4
-from deeprl.threaded.rltools import validate_episode
 
 from gymnasium.spaces import Discrete, Box
 from gymnasium.wrappers import TransformObservation
 import gymnasium as gym
 
-__version__ = 0.061
+__version__ = 0.069
+
+
+class RewardsNormalizer:
+    def __init__(self):
+        self.rewards_min: float = np.inf
+        self.rewards_max: float = -np.inf
+
+    def __call__(self, rewards) -> np.array:
+        self.rewards_min = np.minimum(self.rewards_min, np.min(rewards))
+        self.rewards_max = np.maximum(self.rewards_max, np.max(rewards))
+        return (rewards - self.rewards_min) / (self.rewards_max - self.rewards_min)
 
 
 class AgentMeta:
@@ -657,13 +667,16 @@ class A2CAgent(AgentMeta):
         self.__RLSYNC_obj = None
         self.update_id_count()
         self.id_num = int(self.id_count)
-        self.filters_base_size = 128
+        self.filters_base_size = 64
         random.seed(self.seed)
         self.states_queue_size = 1
         self.actor_net_kwargs: dict = {}
         self.value_net_kwargs: dict = {}
         self.actor_net = None
         self.value_net = None
+        self.action_type: str = 'discrete'
+        self.get_action_method: Optional[Callable] = None
+        self.n_epochs: int = 2
         self.set_env(self.env)
 
         self.memory = None
@@ -702,21 +715,33 @@ class A2CAgent(AgentMeta):
     def set_env(self, env):
         self.env = copy.deepcopy(env)
         self.env.reset()
-        self.n_actions = self.env.action_space.n
+        value_out_filters = 1
+        actor_last_activation = None
+        if isinstance(self.env.action_space, Discrete):
+            self.n_actions = self.env.action_space.n
+            self.get_action_method = self._get_discrete_action
+            # actor_last_activation = 'softmax'
+
+        # elif isinstance(self.env.action_space, Box):
+        #     self.n_actions = self.env.action_space.shape[0]
+        #     self.action_type = 'box'
+        #     actor_last_activation = torch.nn.Tanh
+        #     self.get_action_method =
         if isinstance(self.env.observation_space, Box):
             self.state_size = len(self.env.observation_space.high)
             self.actor_net_kwargs = {'state_size': self.state_size * self.states_queue_size,
                                      'out_filters': self.n_actions,
                                      'l1_filters': int(self.states_queue_size * self.filters_base_size),
-                                     'seed': self.seed
+                                     'seed': self.seed,
+                                     'last_activation': actor_last_activation,
                                      }
             self.value_net_kwargs = {'state_size': self.state_size * self.states_queue_size,
-                                     'out_filters': 1,
+                                     'out_filters': value_out_filters,
                                      'l1_filters': int(self.states_queue_size * self.filters_base_size),
-                                     'seed': self.seed
+                                     'seed': self.seed,
                                      }
 
-    def get_action(self, state, info, eps_threshold: Union[float or None] = None):
+    def _get_discrete_action(self, state, info, eps_threshold: Optional[float] = None):
         with torch.no_grad():
             #   --> size : (1, 4)
             state_batch = np.expand_dims(state, axis=0)
@@ -729,9 +754,29 @@ class A2CAgent(AgentMeta):
             # From logits to probabilities
             probs = F.softmax(logits, dim=-1)
             # Pick up action's sample
-            a = torch.multinomial(probs, num_samples=1)
-            # Return
-            return a.tolist()[0]
+            action = torch.multinomial(probs, num_samples=1)
+            return action.tolist()[0]
+            # return action.cpu().numpy()[0]
+
+    # def _get_box_action(self, state, info, eps_threshold: Optional[float] = None):
+    #     with torch.no_grad():
+    #         state_batch = np.expand_dims(state, axis=0)
+    #         state_batch = torch.tensor(state_batch, dtype=torch.float32).to(self.device)
+    #
+    #         # Get logits from state
+    #         #   --> size : (1, 2)
+    #         logits = self.actor_net(state_batch).squeeze()
+    #         #   --> size : (2)
+    #         # logits = logits.squeeze(dim=0)
+    #         # From logits to probabilities
+    #         probs = F.softmax(logits, dim=-1)
+    #         # Pick up action's sample
+    #         a = torch.multinomial(probs, num_samples=1)
+    #         # Return
+    #         return a.tolist()[0]
+
+    def get_action(self, state, info, eps_threshold: Optional[float] = None):
+        return self.get_action_method(state, info, eps_threshold)
 
     def episode_learn(self) -> Tuple[float, int]:
         episode_reward = 0
@@ -746,7 +791,7 @@ class A2CAgent(AgentMeta):
             episode_reward += reward
 
             done = terminated or truncated
-            # next_state = observation if NOT terminated
+            # next_state = observation -> if NOT terminated
             if terminated:
                 next_state = None
             else:
@@ -773,16 +818,14 @@ class A2CAgent(AgentMeta):
         self.l1_cache.append([state, action, next_state, reward])
         if flush:
             self.local_episode += 1
-            # self.memory.extend([Transition(*element) for element in self.l1_cache])
-            # print(f'\n{self.ConfigAgent.EPS_DECAY}//{self.RLSYNC_obj.get_time_step()}//{self.eps_threshold}')
             episode_data = [Transition(*element) for element in self.l1_cache]
             self.optimize_model(Transition(*zip(*episode_data)))
             self.memory.extend_episode(episode_data)
             if RLSYNC_obj.get_agents_running() > 1:
                 if self.memory.ready and self.local_episode % self.ConfigAgent.SYNC == 0:
-                    for ix in range(self.ConfigAgent.BATCH_SIZE):
-                        episode_data = self.memory.sample_episode()
-                        self.optimize_model(Transition(*zip(*episode_data)))
+                    episodes_lst = self.memory.sample_episode(self.ConfigAgent.BATCH_SIZE)
+                    for episode in episodes_lst:
+                        self.optimize_model(Transition(*zip(*episode)))
             self.l1_cache.clear()
             self.soft_update()
 
@@ -902,15 +945,16 @@ class A2CAgent(AgentMeta):
 
     def load_transfer_weights(self, agent_id):
         __weights = self.RLSYNC_obj.get_weights(agent_id)
-        try:
-            self.actor_net.load_state_dict(__weights[0])
-        except:
-            self.actor_net.load_state_dict(self.prepared_for_device(__weights[0]))
+        with self.RLSYNC_obj.lock:
+            try:
+                self.actor_net.load_state_dict(__weights[0])
+            except:
+                self.actor_net.load_state_dict(self.prepared_for_device(__weights[0]))
 
-        try:
-            self.value_net.load_state_dict(__weights[1])
-        except:
-            self.value_net.load_state_dict(self.prepared_for_device(__weights[1]))
+            try:
+                self.value_net.load_state_dict(__weights[1])
+            except:
+                self.value_net.load_state_dict(self.prepared_for_device(__weights[1]))
 
     def reset(self):
         self.l1_cache.clear()

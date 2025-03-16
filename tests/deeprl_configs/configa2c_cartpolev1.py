@@ -1,19 +1,19 @@
 class ConfigAgent:
     ENV_NAME = "CartPole-v1"
-    BUFFER_SIZE = 10_000         # replay buffer size
-    BATCH_SIZE = 256             # batch size
+    BUFFER_SIZE = 1500          # replay buffer size (frames)
+    BATCH_SIZE = 1              # batch size (episodes)
     MASKED_ACTION = False
-    GAMMA = 0.99                 # discount factor
-    SYNC_FRAME = 3              # how often to update the target_network (frames) or learn every X from buffer episode for A2C
-    AGENTS_SYNC_FRAME = 25      # how often to update the networks between running agents (frames) (must be > 10)
+    GAMMA = 0.99                # discount factor
+    SYNC = 2                    # how often we use replay buffer (episodes) to update target network
+    AGENTS_SYNC = 5             # how often to update the networks (weights) between running agents (episodes)
     EPS_START = 0.00
     EPS_END = 0.00
     EPS_DECAY = 1_000_000
-    TAU = 1e-4
-    LR = 1e-3
+    TAU = 5e-4                  # updating agents networks with this rate
+    LR = 5e-4                   # learning rate
     EXPERIMENT_PATH = "./deeprl/threaded/"
-    REWARD_CONDITION = 200
-    VALIDATION_STEP = 500
-    VALIDATION_RATIO = 0.1
-    VALIDATION_EPS = 10
-    EVALUATION_EPS = 5
+    REWARD_CONDITION = 500      # reward condition to check in validation for (win_ratio calculation)
+    VALIDATION_STEP = 1000      # validate every n episode
+    VALIDATION_RATIO = 0.1      # validation ratio * validation step = episodes to validate
+    VALIDATION_EPS = 10         # validation episodes to save video
+    EVALUATION_EPS = 5          # evaluation episodes to save video

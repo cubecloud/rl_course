@@ -3,7 +3,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 __version__ = 0.008
 
 
@@ -105,24 +104,49 @@ class Conv2Dnet(nn.Module):
 
 
 class ActorNet(nn.Module):
-    def __init__(self, state_size: int = 4, l1_filters: int = 16, out_filters: int = 2, seed: int = 42):
+    """Actor Network for Policy Gradient Methods."""
+
+    def __init__(self, state_size: int = 4, l1_filters: int = 16, out_filters: int = 2,
+                 seed: int = 42, last_activation=None):
+        """
+        Initializes the ActorNet class with customizable parameters.
+
+        Args:
+            state_size (int): Input size of the network (default: 4).
+            l1_filters (int): Number of filters in the first layer (default: 16).
+            out_filters (int): Output size of the network (default: 2).
+            seed (int): Random seed for reproducibility (default: 42).
+            last_activation (Callable, optional): Activation function to apply at the output layer.
+        """
         super().__init__()
-        self.seed = torch.manual_seed(seed)
-        self.layer1 = nn.Linear(state_size, l1_filters)
-        self.layer2 = nn.Linear(l1_filters, out_filters)
+        self.seed = torch.manual_seed(seed)  # Set random seed for reproducibility
+        self.layer1 = nn.Linear(state_size, l1_filters)  # First linear layer
+
+        # Create the second layer based on whether an activation function was provided
+        if last_activation == 'softmax':
+            self.layer2 = nn.Sequential(
+                nn.Linear(l1_filters, out_filters),  # Third linear layer
+                nn.Softmax(dim=1)  # Apply Softmax along the classes axis
+            )
+        elif last_activation is not None:
+            self.layer2 = nn.Sequential(
+                nn.Linear(l1_filters, out_filters),  # Third linear layer
+                last_activation()  # Apply specified activation function
+            )
+        else:
+            self.layer2 = nn.Sequential(
+                nn.Linear(l1_filters, out_filters)  # Third linear layer without activation
+            )
 
     def forward(self, x):
-        x = F.relu(self.layer1(x))
-        return self.layer2(x)
+        """
+        Performs a forward pass through the network.
 
+        Args:
+            x (Tensor): Input tensor.
 
-# class ValueNet(nn.Module):
-#     def __init__(self, state_size: int = 4, l1_filters: int = 16, values: int = 1, seed: int = 42):
-#         super().__init__()
-#         self.seed = torch.manual_seed(seed)
-#         self.layer1 = nn.Linear(state_size, l1_filters)
-#         self.layer2 = nn.Linear(l1_filters, values)
-#
-#     def forward(self, x):
-#         x = F.relu(self.layer1(x))
-#         return self.layer2(x)
+        Returns:
+            Tensor: Output tensor after applying layers and activations.
+        """
+        x = F.relu(self.layer1(x))  # Apply ReLU activation to the first layer's output
+        return self.layer2(x)  # Return the result from the second layer

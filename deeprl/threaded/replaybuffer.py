@@ -6,7 +6,7 @@ import numpy as np
 from deeprl.threaded.rlmutex import rlmutex
 from collections import namedtuple, deque
 
-__version__ = 0.009
+__version__ = 0.011
 
 Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward'))
 
@@ -83,12 +83,18 @@ class ReplayBuffer:
             if not self.ready:
                 self.ready = len(self.memory) == self.capacity
 
-    def sample_episode(self):
+    def sample_episode(self, batch_size=1):
         if self.episodes_indexes:
+            _size = min(len(self.episodes_indexes), batch_size)
             with rlmutex:
-                episode_index = random.sample(self.episodes_indexes, 1)[0]
-                # print(episode_index)
-                return [self.memory[idx] for idx in range(episode_index[0], episode_index[1])]
+                episodes_indexes = random.sample(self.episodes_indexes, _size)
+                buffer = []
+                for eps_idxes in episodes_indexes:
+                    episode = []
+                    for idx in range(eps_idxes[0], eps_idxes[1]):
+                        episode.append(self.memory[idx])
+                    buffer.append(episode)
+                return buffer
         else:
             return []
 

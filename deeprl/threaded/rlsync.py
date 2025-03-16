@@ -146,7 +146,8 @@ class RlSync(SingletonClass):
         return cls.__episodes_length
 
     def get_weights(cls, agent_id):
-        return cls.__net_weights[agent_id]
+        with cls.lock:
+            return cls.__net_weights[agent_id]
 
     def save_weights(cls, agent_id, weights):
         if cls.__agents_running > 1:
