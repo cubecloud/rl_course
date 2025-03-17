@@ -1,16 +1,16 @@
 class ConfigAgent:
     ENV_NAME = "LunarLander-v2"
-    BUFFER_SIZE = 4000          # replay buffer size
-    BATCH_SIZE = 4              # batch size (episodes)
+    BUFFER_SIZE = 16000         # replay buffer size
+    BATCH_SIZE = 7              # batch size (episodes)
     MASKED_ACTION = False
     GAMMA = 0.99                # discount factor
-    SYNC = 4                   # how often we use replay buffer (episodes) to update target network
-    AGENTS_SYNC = 4             # how often to update the networks (weights) between running agents (episodes)
+    SYNC = 7                   # how often we use replay buffer (episodes) to update target network
+    AGENTS_SYNC = 7             # how often to update the networks (weights) between running agents (episodes)
     EPS_START = 0.00
     EPS_END = 0.00
     EPS_DECAY = 1_000_000
-    TAU = 1.5e-3                # updating agents networks with this rate
-    LR = 5e-4                   # learning rate
+    TAU = 2e-4                  # updating agents networks with this rate
+    LR = 5e-5                   # learning rate
     EXPERIMENT_PATH = "./deeprl/threaded/"
     REWARD_CONDITION = 200      # reward condition to check in validation for (win_ratio calculation)
     VALIDATION_STEP = 2000      # validate every n episode

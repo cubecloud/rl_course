@@ -25,7 +25,6 @@ if __name__ == '__main__':
                       render_mode=None)
     env = gym.make(**env_kwargs)
 
-    # rl = RLA2C(env_kwargs, A2CAgent, agents_num=1, config=ConfigAgent, agents_devices=['cuda'])
     rl = RLA2C(env_kwargs, A2CAgent, agents_num=3, config=ConfigAgent, agents_devices=['cpu', 'cuda', 'cpu'])
 
     rl.fit(to_learn,

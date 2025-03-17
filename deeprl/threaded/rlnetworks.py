@@ -106,7 +106,7 @@ class Conv2Dnet(nn.Module):
 class ActorNet(nn.Module):
     """Actor Network for Policy Gradient Methods."""
 
-    def __init__(self, state_size: int = 4, l1_filters: int = 16, out_filters: int = 2,
+    def __init__(self, state_size: int = 4, l1_filters: int = 16, l2_filters: int = 16, out_filters: int = 2,
                  seed: int = 42, last_activation=None):
         """
         Initializes the ActorNet class with customizable parameters.
@@ -114,6 +114,7 @@ class ActorNet(nn.Module):
         Args:
             state_size (int): Input size of the network (default: 4).
             l1_filters (int): Number of filters in the first layer (default: 16).
+            l2_filters (int): Number of filters in the second layer (default: 16).
             out_filters (int): Output size of the network (default: 2).
             seed (int): Random seed for reproducibility (default: 42).
             last_activation (Callable, optional): Activation function to apply at the output layer.
@@ -121,21 +122,22 @@ class ActorNet(nn.Module):
         super().__init__()
         self.seed = torch.manual_seed(seed)  # Set random seed for reproducibility
         self.layer1 = nn.Linear(state_size, l1_filters)  # First linear layer
+        self.layer2 = nn.Linear(l1_filters, l2_filters)  # First linear layer
 
         # Create the second layer based on whether an activation function was provided
         if last_activation == 'softmax':
-            self.layer2 = nn.Sequential(
-                nn.Linear(l1_filters, out_filters),  # Third linear layer
+            self.layer3 = nn.Sequential(
+                nn.Linear(l2_filters, out_filters),  # Third linear layer
                 nn.Softmax(dim=1)  # Apply Softmax along the classes axis
             )
         elif last_activation is not None:
-            self.layer2 = nn.Sequential(
-                nn.Linear(l1_filters, out_filters),  # Third linear layer
+            self.layer3 = nn.Sequential(
+                nn.Linear(l2_filters, out_filters),  # Third linear layer
                 last_activation()  # Apply specified activation function
             )
         else:
-            self.layer2 = nn.Sequential(
-                nn.Linear(l1_filters, out_filters)  # Third linear layer without activation
+            self.layer3 = nn.Sequential(
+                nn.Linear(l2_filters, out_filters)  # Third linear layer without activation
             )
 
     def forward(self, x):
@@ -149,4 +151,5 @@ class ActorNet(nn.Module):
             Tensor: Output tensor after applying layers and activations.
         """
         x = F.relu(self.layer1(x))  # Apply ReLU activation to the first layer's output
-        return self.layer2(x)  # Return the result from the second layer
+        x = F.relu(self.layer2(x))  # Apply ReLU activation to the second layer's output
+        return self.layer3(x)  # Return the result from the second layer

@@ -33,17 +33,27 @@ __version__ = 0.069
 
 
 class RewardsNormalizer:
-    def __init__(self):
-        self.rewards_min: float = np.inf
-        self.rewards_max: float = -np.inf
+    def __init__(self, normalizer_method: str = 'std', norm_max: float = 200):
+        self.normalizer_method = normalizer_method
+        self.abs_max: float = norm_max
+        if self.normalizer_method == 'std':
+            self.norm_method: Callable = self._std_normalizer
+        elif self.normalizer_method == 'exp':
+            self.norm_method: Callable = self._exp_normalizer
 
     def __call__(self, rewards) -> np.array:
-        self.rewards_min = np.minimum(self.rewards_min, np.min(rewards))
-        self.rewards_max = np.maximum(self.rewards_max, np.max(rewards))
-        return (rewards - self.rewards_min) / (self.rewards_max - self.rewards_min)
+        self.abs_max = np.maximum(self.abs_max, np.max(rewards))
+        return 1 / (1 + np.exp(np.asarray(-rewards, dtype=np.float32) / self.abs_max)) - 0.5
+
+    def _exp_normalizer(self, rewards) -> np.array:
+        self.abs_max = np.maximum(self.abs_max, np.max(rewards))
+        return 1 / (1 + np.exp(np.asarray(-rewards, dtype=np.float32) / self.abs_max)) - 0.5
+
+    def _std_normalizer(self, rewards) -> np.array:
+        return (rewards - np.mean(rewards)) / np.std(rewards)
 
 
-class AgentMeta:
+class AgentMeta(ABC):
     id_count: int = 0
     agent_algo = 'BASE'
 
@@ -435,6 +445,9 @@ class DQNAgent(AgentMeta):
             return action
             # return self.policy_net(state).max(1)[1].view(1, 1).item()
 
+    def transform_reward(self, state, observation, reward, terminated, truncated, info):
+        pass
+
     def optimize_model(self, batch_size):
         """
         Args:
@@ -654,6 +667,7 @@ class DQNAgent(AgentMeta):
 
 class A2CAgent(AgentMeta):
     """ Interacts with and learns from environment."""
+
     id_count: int = -1
     agent_algo = 'A2C'
 
@@ -667,7 +681,7 @@ class A2CAgent(AgentMeta):
         self.__RLSYNC_obj = None
         self.update_id_count()
         self.id_num = int(self.id_count)
-        self.filters_base_size = 64
+        self.filters_base_size: int = 96
         random.seed(self.seed)
         self.states_queue_size = 1
         self.actor_net_kwargs: dict = {}
@@ -676,9 +690,9 @@ class A2CAgent(AgentMeta):
         self.value_net = None
         self.action_type: str = 'discrete'
         self.get_action_method: Optional[Callable] = None
-        self.n_epochs: int = 2
+        self.n_epochs: int = 10
         self.set_env(self.env)
-
+        self.rewards_normalizer = RewardsNormalizer(normalizer_method='std')
         self.memory = None
         self.actor_optimizer = None
         self.value_optimizer = None
@@ -720,60 +734,38 @@ class A2CAgent(AgentMeta):
         if isinstance(self.env.action_space, Discrete):
             self.n_actions = self.env.action_space.n
             self.get_action_method = self._get_discrete_action
-            # actor_last_activation = 'softmax'
 
-        # elif isinstance(self.env.action_space, Box):
-        #     self.n_actions = self.env.action_space.shape[0]
-        #     self.action_type = 'box'
-        #     actor_last_activation = torch.nn.Tanh
-        #     self.get_action_method =
         if isinstance(self.env.observation_space, Box):
             self.state_size = len(self.env.observation_space.high)
             self.actor_net_kwargs = {'state_size': self.state_size * self.states_queue_size,
                                      'out_filters': self.n_actions,
                                      'l1_filters': int(self.states_queue_size * self.filters_base_size),
+                                     'l2_filters': int(self.states_queue_size * self.filters_base_size),
                                      'seed': self.seed,
                                      'last_activation': actor_last_activation,
                                      }
             self.value_net_kwargs = {'state_size': self.state_size * self.states_queue_size,
                                      'out_filters': value_out_filters,
                                      'l1_filters': int(self.states_queue_size * self.filters_base_size),
+                                     'l2_filters': int(self.states_queue_size * self.filters_base_size),
                                      'seed': self.seed,
                                      }
 
     def _get_discrete_action(self, state, info, eps_threshold: Optional[float] = None):
         with torch.no_grad():
-            #   --> size : (1, 4)
             state_batch = np.expand_dims(state, axis=0)
             state_batch = torch.tensor(state_batch, dtype=torch.float32).to(self.device)
+
             # Get logits from state
-            #   --> size : (1, 2)
             logits = self.actor_net(state_batch).squeeze()
-            #   --> size : (2)
-            # logits = logits.squeeze(dim=0)
+
             # From logits to probabilities
             probs = F.softmax(logits, dim=-1)
+
             # Pick up action's sample
             action = torch.multinomial(probs, num_samples=1)
+            # tolist move tensor to cpu if necessary
             return action.tolist()[0]
-            # return action.cpu().numpy()[0]
-
-    # def _get_box_action(self, state, info, eps_threshold: Optional[float] = None):
-    #     with torch.no_grad():
-    #         state_batch = np.expand_dims(state, axis=0)
-    #         state_batch = torch.tensor(state_batch, dtype=torch.float32).to(self.device)
-    #
-    #         # Get logits from state
-    #         #   --> size : (1, 2)
-    #         logits = self.actor_net(state_batch).squeeze()
-    #         #   --> size : (2)
-    #         # logits = logits.squeeze(dim=0)
-    #         # From logits to probabilities
-    #         probs = F.softmax(logits, dim=-1)
-    #         # Pick up action's sample
-    #         a = torch.multinomial(probs, num_samples=1)
-    #         # Return
-    #         return a.tolist()[0]
 
     def get_action(self, state, info, eps_threshold: Optional[float] = None):
         return self.get_action_method(state, info, eps_threshold)
@@ -819,17 +811,24 @@ class A2CAgent(AgentMeta):
         if flush:
             self.local_episode += 1
             episode_data = [Transition(*element) for element in self.l1_cache]
-            self.optimize_model(Transition(*zip(*episode_data)))
+            self.optimize_model([Transition(*zip(*episode_data))])
             self.memory.extend_episode(episode_data)
             if RLSYNC_obj.get_agents_running() > 1:
                 if self.memory.ready and self.local_episode % self.ConfigAgent.SYNC == 0:
                     episodes_lst = self.memory.sample_episode(self.ConfigAgent.BATCH_SIZE)
+                    batch = []
                     for episode in episodes_lst:
-                        self.optimize_model(Transition(*zip(*episode)))
+                        batch.append(Transition(*zip(*episode)))
+                    self.optimize_model(batch)
             self.l1_cache.clear()
             self.soft_update()
 
-    def optimize_model(self, episode_data):
+    def optimize_model(self, episodes_data):
+        for epoch in range(self.n_epochs):
+            for episode in episodes_data:
+                self._optimize_model_episode(episode)
+
+    def _optimize_model_episode(self, episode_data):
         """
         Args:
             episode_data (named_tuple):    episode_data
@@ -843,42 +842,53 @@ class A2CAgent(AgentMeta):
             cum_reward.append(discounted_reward)
 
         # create reversed array cos of using append instead insert
-        cum_reward = np.asarray(cum_reward[::-1])
-        cum_reward = (cum_reward - cum_reward.mean()) / (cum_reward.std())
+        cum_reward = np.array(cum_reward[::-1])
 
+        # using standard normalizer
+        cum_reward = self.rewards_normalizer(cum_reward)
+
+        # setting zero grad for (vf) values function
         self.value_optimizer.zero_grad()
 
+        # creating states tensor
         states = torch.tensor(np.array(episode_data.state), dtype=torch.float32).to(self.device)
+
+        # creating reward (cum_reward) tensor
         cum_reward = torch.tensor(cum_reward, dtype=torch.float32).to(self.device)
 
         # Calculating loss for vf
         values = self.value_net(states)
         values = values.squeeze(dim=1)
         vf_loss = F.mse_loss(values, cum_reward, reduction="none")
-        # calculating vf loss
+
+        # values (vf) gradient backpropagation calculation
         vf_loss.sum().backward()
-        # optimizer step
+
+        # making values gradient step
         self.value_optimizer.step()
 
-        # calculating optimized vf values
+        # calculating optimized (vf) values
         with torch.no_grad():
             values = self.value_net(states)
 
-        # zero grad
+        # setting zero grad for (pi) policy function
         self.actor_optimizer.zero_grad()
-        # преобразуем к тензорам
+
+        # creating actions tensor
         actions = torch.tensor(episode_data.action, dtype=torch.long).to(self.device)
-        # считаем advantage функцию
+        # calculating advantage function
+        # (get (vf) values after gradient update and calculating advantages with real reward)
         advantages = cum_reward - values.squeeze()
 
-        # считаем лосс
+        # calculating loss for policy (pi)
         logits = self.actor_net(states)
         log_probs = -F.cross_entropy(logits, actions.squeeze(), reduction="none")
         pi_loss = -log_probs * advantages
 
-        # считаем градиент
+        # policy (vf) gradient backpropagation calculation
         pi_loss.sum().backward()
-        # делаем шаг оптимизатора
+
+        # making policy gradient step
         self.actor_optimizer.step()
 
     def agents_net_updates(self):
@@ -959,3 +969,17 @@ class A2CAgent(AgentMeta):
     def reset(self):
         self.l1_cache.clear()
         self.net_init(self.actor_net, self.value_net, self.actor_net_kwargs, self.value_net_kwargs)
+
+
+class PPOAgent(A2CAgent):
+    """ Interacts with and learns from environment."""
+    id_count: int = -1
+    agent_algo = 'PPO'
+
+    def __init__(self, env_kwargs, seed, config, device='cpu', net_model=ActorNet):
+        """
+        Args:
+            env:            initialized environment class
+            seed (int):     random seed
+        """
+        super().__init__(env_kwargs, seed, config, device, net_model)
