@@ -7,20 +7,25 @@ import gymnasium as gym
 from deeprl.threaded.rlagents import A2CAgent
 from deeprl.threaded.rlbase import RLBase
 
-__version__ = 0.044
+__version__ = 0.050
 
 TZ = timezone('Europe/Moscow')
 
 if __name__ == '__main__':
-    """ Testing for CartPole-v1 """
-    from deeprl_configs.configa2c_cartpolev1 import ConfigAgent
+    """ Testing for LunarLander-v2 """
+    from deeprl_configs.configa2c_lunarlanderv2 import ConfigAgent
 
-    to_learn = 10000
-    env_kwargs = dict(id=ConfigAgent.ENV_NAME, render_mode=None)
+    to_learn = 80000
+    env_kwargs = dict(id=ConfigAgent.ENV_NAME,
+                      continuous=False,
+                      gravity=-9.8,
+                      enable_wind=True,
+                      wind_power=15.0,
+                      turbulence_power=1.5,
+                      render_mode=None)
     env = gym.make(**env_kwargs)
 
-    rl = RLBase(env_kwargs, A2CAgent, agents_num=3, config=ConfigAgent, agents_devices=['cpu', 'cuda', 'cpu'],
-                agent_kwargs={'filters_base_size': 8})
+    rl = RLBase(env_kwargs, A2CAgent, agents_num=3, config=ConfigAgent, agents_devices=['cpu', 'cuda', 'cpu'])
 
     rl.fit(to_learn,
            condition='episode',

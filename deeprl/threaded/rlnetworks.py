@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from typing import Tuple
 
 __version__ = 0.008
 
@@ -140,7 +141,7 @@ class ActorNet(nn.Module):
                 nn.Linear(l2_filters, out_filters)  # Third linear layer without activation
             )
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor):
         """
         Performs a forward pass through the network.
 
@@ -153,3 +154,62 @@ class ActorNet(nn.Module):
         x = F.relu(self.layer1(x))  # Apply ReLU activation to the first layer's output
         x = F.relu(self.layer2(x))  # Apply ReLU activation to the second layer's output
         return self.layer3(x)  # Return the result from the second layer
+
+
+class ContinuousActorNet(nn.Module):
+    def __init__(self, input_shape: Tuple[int, int, int] = (4, 96, 96), l1_filters: int = 8, action_dim: int = 3,
+                 features_dim: int = 100, seed: int = 42):
+        super(ContinuousActorNet, self).__init__()
+        self.seed = torch.manual_seed(seed)  # Set random seed for reproducibility
+        self.cnn_base = nn.Sequential(  # input shape (4, 96, 96)
+            nn.Conv2d(input_shape[0], l1_filters, kernel_size=4, stride=2),
+            nn.ReLU(),  # activation
+            nn.Conv2d(l1_filters, l1_filters * 2, kernel_size=3, stride=2),  # (8, 47, 47)
+            nn.ReLU(),  # activation
+            nn.Conv2d(l1_filters * 2, l1_filters * 4, kernel_size=3, stride=2),  # (16, 23, 23)
+            nn.ReLU(),  # activation
+            nn.Conv2d(l1_filters * 4, l1_filters * 8, kernel_size=3, stride=2),  # (32, 11, 11)
+            nn.ReLU(),  # activation
+            nn.Conv2d(l1_filters * 8, l1_filters * 16, kernel_size=3, stride=1),  # (64, 5, 5)
+            nn.ReLU(),  # activation
+            nn.Conv2d(l1_filters * 16, l1_filters * 32, kernel_size=3, stride=1),  # (128, 3, 3)
+            nn.ReLU(),  # activation
+        )  # output shape (256, 1, 1)
+
+        # Calculate combined feature dimension
+        with torch.no_grad():
+            dummy_input = torch.randn(1, input_shape[0], input_shape[1], input_shape[2])
+            d = self.cnn_base(dummy_input)
+            d = d.view(d.size(0), -1)
+            self.conv2d_features = d.shape[-1]
+            # print(f'Features from conv2d extractor: {self.conv2d_features}')
+        self.fc = nn.Sequential(nn.Linear(self.conv2d_features, features_dim), nn.ReLU())
+
+        with torch.no_grad():
+            d = self.fc(d)
+            self._features_dim = d.shape[-1]
+            # print(f'features_dim: {d.shape[-1]}')
+
+        self.v = nn.Sequential(nn.Linear(self._features_dim, self._features_dim),
+                               nn.ReLU(),
+                               nn.Linear(self._features_dim, 1))
+        self.mu_layer = nn.Sequential(nn.Linear(self._features_dim, action_dim),
+                                      nn.Tanh())  # [-1., 1.] range
+        self.sigma_layer = nn.Sequential(nn.Linear(self._features_dim, action_dim),
+                                         nn.Softplus())
+        self.apply(self._weights_init)
+
+    @staticmethod
+    def _weights_init(m):
+        if isinstance(m, nn.Conv2d):
+            nn.init.xavier_uniform_(m.weight, gain=nn.init.calculate_gain('relu'))
+            nn.init.constant_(m.bias, 0.1)
+
+    def forward(self, x):
+        x = self.cnn_base(x)
+        x = x.view(x.size(0), -1)
+        x = self.fc(x)
+        v = self.v(x)
+        mu = self.mu_layer(x)
+        sigma = self.sigma_layer(x) + 1e-5  # positive sigma
+        return (mu, sigma), v

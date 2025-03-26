@@ -4,7 +4,7 @@ class ConfigAgent:
     BATCH_SIZE = 7              # batch size (episodes)
     MASKED_ACTION = False
     GAMMA = 0.99                # discount factor
-    SYNC = 7                   # how often we use replay buffer (episodes) to update target network
+    SYNC = 7                    # how often we use replay buffer (episodes) to update target network
     AGENTS_SYNC = 7             # how often to update the networks (weights) between running agents (episodes)
     EPS_START = 0.00
     EPS_END = 0.00

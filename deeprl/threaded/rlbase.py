@@ -15,7 +15,9 @@ from tqdm import tqdm
 from deeprl.threaded.rlsync import RLSYNC_obj
 from deeprl.threaded.rlagents import DQNAgent
 from deeprl.threaded.rlagents import A2CAgent
+from deeprl.threaded.rlagents import PPOAgent
 from deeprl.threaded.rltools import show_mp4
+from deeprl.threaded.replaybuffer import ReplayBuffer, PPOTransition
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -31,7 +33,7 @@ class RLBase:
     algorithm_name = None
 
     def __init__(self, env_kwargs, agent=DQNAgent, agents_num=1, config=None, agents_devices: list = ('cpu',),
-                 seed: int = 42, **kwargs):
+                 seed: int = 42, agent_kwargs=None, **kwargs):
         """
         Reinforcement learning realization with multithreading and shared replay buffer
         Args:
@@ -39,15 +41,19 @@ class RLBase:
             agents_num (int):           agents number
             agents_devices List[str,]:  agents devices
             seed(int):                  random seed
+            agent_kwargs (dict):        additional kwargs for agent
             *kwargs:
         """
-
         self.env_kwargs = env_kwargs
         self.agent = agent
+        self.algorithm_name = self.agent.agent_algo
         self.agents_num: int = agents_num
         self.agents_devices: List[str,] = self.prepare_agents_devices(agents_devices)
         self.agents_base: list = []
         self.seed: int = seed
+        if agent_kwargs is None:
+            agent_kwargs = {}
+        self.agent_kwargs = agent_kwargs
         self.net = None
         self.episodes_rewards: list = []
         self.episodes_length: list = []
@@ -57,6 +63,11 @@ class RLBase:
         self.ConfigAgent = config
         self.set_exp_id()
         self.create_exp_dirs()
+
+        #   changing ReplayBuffer settings for PPO algo
+        if self.algorithm_name == 'PPO':
+            RLSYNC_obj.memory = ReplayBuffer(transition_cls=PPOTransition)
+
 
     def create_exp_dirs(self):
         dirs = dict()
@@ -116,7 +127,8 @@ class RLBase:
 
     def agents_init(self):
         for ix, device in zip(range(self.agents_num), self.agents_devices):
-            self.agents_base.append(self.agent(self.env_kwargs, seed=self.seed, device=device, config=self.ConfigAgent))
+            self.agents_base.append(self.agent(self.env_kwargs, seed=self.seed, device=device, config=self.ConfigAgent,
+                                               **self.agent_kwargs))
 
     def save_movie_gif(self, gif_path_filename: str, weights_path_filename: Union[str, None] = None):
         self.agents_init()
@@ -220,6 +232,11 @@ class RLBase:
                 last_avg_step_count: float = 0.
                 last_avg_reward: float = 0.
                 last_val_step: int = 0
+                ep_rewards = rlsync_obj.get_episodes_rewards()
+                if ep_rewards:
+                    avg_train_reward: float = np.mean(ep_rewards[min(0, len(ep_rewards)-100):])
+                else:
+                    avg_train_reward: float = 0
                 if val_metric:
                     last_val_step = max(val_metric.keys())
                     last_win_share = val_metric[last_val_step]['win_ratio']
@@ -228,6 +245,7 @@ class RLBase:
                 msg = (
                     f"Frame: {rlsync_obj.get_time_step():09d} | "
                     f"Ep.terminated/truncated: {rlsync_obj.get_terminated()}/{rlsync_obj.get_truncated()} | "
+                    f"MA100.rewards: {avg_train_reward:.4f} | "
                     f"Epsilon: {rlsync_obj.get_eps_threshold():.4f} | "
                     f"Val {last_val_step:06d}: win_ratio={last_win_share:.2f}, avg_reward={last_avg_reward:.2f}, "
                     f"avg_steps: {last_avg_step_count:.1f}")
@@ -266,36 +284,3 @@ class RLBase:
         self.agents_base[0].evaluation(episodes, reward_condition)
         pass
 
-
-class RLDQN(RLBase):
-    algorithm_name = 'DQN'
-
-    def __init__(self, env_kwargs, agent=DQNAgent, agents_num=1, config=None, agents_devices: list = ('cpu',), seed: int = 42,
-                 **kwargs):
-        """
-        Reinforcement learning DQN algorithm realisation with multithreading and shared replay buffer
-        Args:
-            env:                        environment object
-            agents_num (int):           agents number
-            agents_devices List[str,]:  agents devices
-            seed(int):                  random seed
-            *kwargs:
-        """
-        super().__init__(env_kwargs, agent, agents_num, config, agents_devices, seed, **kwargs)
-
-
-class RLA2C(RLBase):
-    algorithm_name = 'A2C'
-
-    def __init__(self, env_kwargs, agent=A2CAgent, agents_num=1, config=None, agents_devices: list = ('cpu',), seed: int = 42,
-                 **kwargs):
-        """
-        Reinforcement learning A2C algorithm realization with multithreading and shared replay buffer
-        Args:
-            env_kwargs:                 environment kwargs
-            agents_num (int):           agents number
-            agents_devices List[str,]:  agents devices
-            seed(int):                  random seed
-            *kwargs:
-        """
-        super().__init__(env_kwargs, agent, agents_num, config, agents_devices, seed,  **kwargs)

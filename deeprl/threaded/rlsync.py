@@ -128,14 +128,20 @@ class RlSync(SingletonClass):
         return cls.__total_time_steps
 
     def append_episodes_rewards(cls, value, id_num):
-        with cls.lock:
-            # logger.debug(f'append_episodes_rewards {id_num} setting the lock')
+        if cls.__agents_running > 1:
+            with cls.lock:
+                # logger.debug(f'append_episodes_rewards {id_num} setting the lock')
+                cls.__episodes_rewards.append(value)
+            # logger.debug(f'append_episodes_rewards {id_num} release the lock')
+        else:
             cls.__episodes_rewards.append(value)
-        # logger.debug(f'append_episodes_rewards {id_num} release the lock')
 
     def append_episodes_length(cls, value, id_num):
-        with cls.lock:
-            # logger.debug(f'append_episodes_length {id_num} setting the lock')
+        if cls.__agents_running > 1:
+            with cls.lock:
+                # logger.debug(f'append_episodes_length {id_num} setting the lock')
+                cls.__episodes_length.append(value)
+        else:
             cls.__episodes_length.append(value)
         # logger.debug(f'append_episodes_length {id_num} release the lock')
 

@@ -9,15 +9,17 @@ from collections import namedtuple, deque
 __version__ = 0.011
 
 Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward'))
+PPOTransition = namedtuple('PPOTransition', ('state', 'action', 'a_logprob', 'reward', 'next_state'))
 
 
 class ReplayBuffer:
 
-    def __init__(self, capacity: int = 10000):
+    def __init__(self, capacity: int = 10000, transition_cls=Transition):
         self.capacity = capacity
         self.memory = deque([], maxlen=capacity)
         self.__ready = False
         self.episodes_indexes = []
+        self.transition_cls = transition_cls
 
     def buffer_resize(self, new_capacity: int):
         if self.capacity != new_capacity:
@@ -38,7 +40,7 @@ class ReplayBuffer:
         with rlmutex:
             if self.episodes_indexes:
                 self.__recalc_episodes_indexes(1)
-            self.memory.append(Transition(*args))
+            self.memory.append(self.transition_cls(*args))
             if not self.ready:
                 self.ready = len(self.memory) == self.capacity
 
@@ -85,9 +87,9 @@ class ReplayBuffer:
 
     def sample_episode(self, batch_size=1):
         if self.episodes_indexes:
-            _size = min(len(self.episodes_indexes), batch_size)
+            real_size = min(len(self.episodes_indexes), batch_size)
             with rlmutex:
-                episodes_indexes = random.sample(self.episodes_indexes, _size)
+                episodes_indexes = random.sample(self.episodes_indexes, real_size)
                 buffer = []
                 for eps_idxes in episodes_indexes:
                     episode = []
@@ -95,6 +97,19 @@ class ReplayBuffer:
                         episode.append(self.memory[idx])
                     buffer.append(episode)
                 return buffer
+        else:
+            return []
+
+    def get_episodes_range(self, batch_size=1):
+        if self.episodes_indexes:
+            episode = []
+            real_size = min(len(self.episodes_indexes), batch_size)
+            with rlmutex:
+                eps_idx_start = self.episodes_indexes[-real_size][0]
+                eps_idx_end = self.episodes_indexes[-1][1]
+                for idx in range(eps_idx_start, eps_idx_end):
+                    episode.append(self.memory[idx])
+                return episode
         else:
             return []
 
@@ -113,6 +128,8 @@ class ReplayBuffer:
         with rlmutex:
             self.memory.clear()
             self.ready = len(self.memory) == self.capacity
+            self.episodes_indexes = []
+            self.__ready = False
 
     @property
     def ready(self):

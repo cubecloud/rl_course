@@ -5,7 +5,7 @@ sys.path.insert(0, '~/Python/projects/rl_course/deeprl')
 from pytz import timezone
 import gymnasium as gym
 from deeprl.threaded.rlagents import DQNAgent
-from deeprl.threaded.rlbase import RLDQN
+from deeprl.threaded.rlbase import RLBase
 
 __version__ = 0.044
 
@@ -19,7 +19,7 @@ if __name__ == '__main__':
     env_kwargs = dict(id=ConfigAgent.ENV_NAME, render_mode=None)
     env = gym.make(**env_kwargs)
 
-    rl = RLDQN(env_kwargs, DQNAgent, agents_num=3, config=ConfigAgent, agents_devices=['cuda', 'cpu', 'cpu'])
+    rl = RLBase(env_kwargs, DQNAgent, agents_num=3, config=ConfigAgent, agents_devices=['cuda', 'cpu', 'cpu'])
 
     rl.fit(to_learn,
            condition='episode',
