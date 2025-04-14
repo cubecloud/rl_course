@@ -20,8 +20,7 @@ if __name__ == '__main__':
                       render_mode=None)
     env = gym.make(**env_kwargs)
 
-    # rl = RLBase(env_kwargs, PPOAgent, agents_num=1, config=ConfigAgent, agents_devices=['cuda',])
-    rl = RLBase(env_kwargs, PPOAgent, agents_num=2, config=ConfigAgent, agents_devices=['cuda', 'cpu'])
+    rl = RLBase(env_kwargs, PPOAgent, agents_num=1, config=ConfigAgent, agents_devices=['cuda',])
     #
     rl.fit(to_learn,
            condition='episode',
