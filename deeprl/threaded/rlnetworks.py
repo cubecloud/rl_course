@@ -177,25 +177,17 @@ class ContinuousActorNet(nn.Module):
         )  # output shape (256, 1, 1)
 
         # Calculate combined feature dimension
-        with torch.no_grad():
-            dummy_input = torch.randn(1, input_shape[0], input_shape[1], input_shape[2])
-            d = self.cnn_base(dummy_input)
-            d = d.view(d.size(0), -1)
-            self.conv2d_features = d.shape[-1]
-            # print(f'Features from conv2d extractor: {self.conv2d_features}')
+        self.conv2d_features = l1_filters * 32
+        # print(f'Features from conv2d extractor: {self.conv2d_features}')
+
         self.fc = nn.Sequential(nn.Linear(self.conv2d_features, features_dim), nn.ReLU())
 
-        with torch.no_grad():
-            d = self.fc(d)
-            self._features_dim = d.shape[-1]
-            # print(f'features_dim: {d.shape[-1]}')
-
-        self.v = nn.Sequential(nn.Linear(self._features_dim, self._features_dim),
+        self.v = nn.Sequential(nn.Linear(self.conv2d_features, features_dim),
                                nn.ReLU(),
-                               nn.Linear(self._features_dim, 1))
-        self.mu_layer = nn.Sequential(nn.Linear(self._features_dim, action_dim),
+                               nn.Linear(features_dim, 1))
+        self.mu_layer = nn.Sequential(nn.Linear(features_dim, action_dim),
                                       nn.Tanh())  # [-1., 1.] range
-        self.sigma_layer = nn.Sequential(nn.Linear(self._features_dim, action_dim),
+        self.sigma_layer = nn.Sequential(nn.Linear(features_dim, action_dim),
                                          nn.Softplus())
         self.apply(self._weights_init)
 
@@ -207,9 +199,11 @@ class ContinuousActorNet(nn.Module):
 
     def forward(self, x):
         x = self.cnn_base(x)
-        x = x.view(x.size(0), -1)
-        x = self.fc(x)
+        x = x.view(-1, self.conv2d_features)
+        # values must be taken before FC layers, straight after CNN extraction
         v = self.v(x)
+
+        x = self.fc(x)
         mu = self.mu_layer(x)
         sigma = self.sigma_layer(x) + 1e-5  # positive sigma
         return (mu, sigma), v

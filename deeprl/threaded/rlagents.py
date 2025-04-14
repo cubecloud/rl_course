@@ -485,6 +485,8 @@ class DQNAgent(AgentMeta):
         """
 
         def calc_gradient_algo(state_batch, action_batch, reward_batch):
+            self.policy_net.train(True)
+            self.target_net.train(True)
             # Вычислить маску нефинальных состояний и соединить элементы батча
             # (финальным состоянием должно быть то, после которого моделирование закончилось)
             t_non_final_mask = torch.tensor(_non_final_mask, device=self.device,
@@ -546,6 +548,8 @@ class DQNAgent(AgentMeta):
         self.soft_update()
 
     def target_net_update(self):
+        self.policy_net.eval()
+        self.target_net.eval()
         policy_net_state_dict = self.policy_net.state_dict()
         target_net_state_dict = self.target_net.state_dict()
         for key in policy_net_state_dict:
@@ -563,6 +567,8 @@ class DQNAgent(AgentMeta):
         agents_lst = list(range(self.RLSYNC_obj.get_agents_running()))
         agents_lst.remove(self.id_num)
 
+        self.policy_net.eval()
+        self.target_net.eval()
         local_policy_net_state_dict = self.policy_net.state_dict()
         local_target_net_state_dict = self.target_net.state_dict()
 
@@ -1016,7 +1022,7 @@ class PPOAgent(AgentMeta):
     agent_algo = 'PPO'
 
     def __init__(self, env_kwargs, seed, config, device='cpu', net_model=ActorNet, filters_base_size: int = 96,
-                 states_queue_size: int = 1, batch_size: int = 256):
+                 states_queue_size: int = 1, batch_size: int = 128):
         """
         Args:
             env:            initialized environment class
@@ -1050,8 +1056,8 @@ class PPOAgent(AgentMeta):
         self.local_episode: int = 0
         self.max_grad_norm = 0.5
         self.clip_param = 0.1  # epsilon in clipped loss
-        self.ent_coef = 0.2
-        self.vf_coef = 1.0
+        self.ent_coef = 0.01
+        self.vf_coef = 0.5
         self.frame_idx = -1
 
     @classmethod
@@ -1108,7 +1114,7 @@ class PPOAgent(AgentMeta):
                     self.env = EnvFrameStackedWrapper(env=self.env,
                                                       env_kwargs=self.env_kwargs,
                                                       stack_frames=4,
-                                                      action_repeat=6,
+                                                      action_repeat=8,
                                                       reward_norm_window=100,
                                                       ma_reward_condition=-0.1,
                                                       color_control=185,
@@ -1130,11 +1136,11 @@ class PPOAgent(AgentMeta):
 
     def net_init(self, actor_net, value_net, actor_net_kwargs, value_net_kwargs):
         with self.__RLSYNC_obj.lock:
-            self.actor_net = actor_net(**actor_net_kwargs).to(self.device)
-            self.actor_optimizer = optim.AdamW(self.actor_net.parameters(), lr=self.ConfigAgent.LR)
+            self.actor_net = actor_net(**actor_net_kwargs).double().to(self.device)
+            self.actor_optimizer = optim.Adam(self.actor_net.parameters(), lr=self.ConfigAgent.LR)
             if self.discrete:
-                self.value_net = value_net(**value_net_kwargs).to(self.device)
-                self.value_optimizer = optim.AdamW(self.value_net.parameters(), lr=self.ConfigAgent.LR)
+                self.value_net = value_net(**value_net_kwargs).double().to(self.device)
+                self.value_optimizer = optim.Adam(self.value_net.parameters(), lr=self.ConfigAgent.LR)
             else:
                 self.value_net = self.actor_net
                 self.value_optimizer = self.actor_optimizer
@@ -1144,8 +1150,11 @@ class PPOAgent(AgentMeta):
                              state: Union[np.ndarray, torch.Tensor],
                              info: Optional[dict] = None,
                              eps_threshold: Optional[float] = None) -> tuple:
-        state = torch.from_numpy(state).float().unsqueeze(0)
-        logits = self.actor_net(state)
+        state = torch.from_numpy(state).double().to(self.device).unsqueeze(0)
+
+        self.actor_net.eval()
+        with torch.no_grad():
+            logits = self.actor_net(state)
         cat_distribution = torch.distributions.Categorical(logits=logits)
         action = cat_distribution.sample()
         a_logprob = cat_distribution.log_prob(action).sum(dim=1)
@@ -1157,7 +1166,8 @@ class PPOAgent(AgentMeta):
                                state: Union[np.ndarray, torch.Tensor],
                                info: Optional[dict] = None,
                                eps_threshold: Optional[float] = None) -> tuple:
-        state = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
+        state = torch.from_numpy(state).double().to(self.device).unsqueeze(0)
+        self.actor_net.eval()
         with torch.no_grad():
             mu, sigma = self.actor_net(state)[0]
 
@@ -1184,13 +1194,17 @@ class PPOAgent(AgentMeta):
     def step(self, current_state, action):
         if self.use_env_wrapper:
             self.frame_idx += self.env.action_repeat
-        state, reward, terminated, truncated, info = self.env.step(action)
-        return state, reward, terminated, truncated, info
+        return self.env.step(action)
 
     def reset(self):
         self.env.reset()
         self.l1_cache.clear()
         self.net_init(self.actor_net, self.value_net, self.actor_net_kwargs, self.value_net_kwargs)
+
+    def episode_reset(self):
+        self.l1_cache.clear()
+        if self.use_env_wrapper:
+            self.env.reset()
 
     def episode_learn(self) -> Tuple[float, int]:
         episode_reward = 0
@@ -1208,18 +1222,13 @@ class PPOAgent(AgentMeta):
 
             done = terminated or truncated
 
-            # if terminated:
-            #     next_state = None
-            # else:
-            #     next_state = state
-
-            state = next_state
             # update the timesteps +1
             self.RLSYNC_obj.add_time_step()
             self.local_timestep += 1
 
             # training step
             self.train_step(state, action, a_logprob, reward, next_state, flush=done)
+            state = next_state
 
             if done:
                 if truncated:
@@ -1241,7 +1250,7 @@ class PPOAgent(AgentMeta):
                 else:
                     self.optimize_model()
                     self.memory.clear()
-            self.l1_cache.clear()
+            self.episode_reset()
             self.soft_update()
 
     def optimize_model(self):
@@ -1258,17 +1267,19 @@ class PPOAgent(AgentMeta):
                 s_.append(transition.next_state)
                 old_a_logprob.append(transition.a_logprob)
 
-            s = torch.from_numpy(np.array(s)).to(self.device)
-            a = torch.from_numpy(np.array(a)).to(self.device)
-            r = torch.from_numpy(np.array(r, dtype=np.float32)).to(self.device).view(-1, 1)
-            s_ = torch.from_numpy(np.array(s_)).to(self.device)
-            old_a_logprob = torch.from_numpy(np.array(old_a_logprob)).to(self.device).view(-1, 1)
+            s = torch.from_numpy(np.asarray(s, dtype=np.float64)).to(self.device)
+            a = torch.from_numpy(np.asarray(a, dtype=np.float64)).to(self.device)
+            r = torch.from_numpy(np.asarray(r, dtype=np.float64)).to(self.device).view(-1, 1)
+            s_ = torch.from_numpy(np.asarray(s_, dtype=np.float64)).to(self.device)
+            old_a_logprob = torch.from_numpy(np.asarray(old_a_logprob, dtype=np.float64)).to(self.device).view(-1, 1)
 
+            self.actor_net.eval()
             with torch.no_grad():
                 target_v = r + self.ConfigAgent.GAMMA * self.actor_net(s_)[1]
                 adv = target_v - self.actor_net(s)[1]
                 adv = (adv - adv.mean()) / (adv.std() + 1e-8)
 
+            self.actor_net.train(True)
             for _ in range(self.n_epochs):
                 for index in BatchSampler(SubsetRandomSampler(range(s.shape[0])), self.batch_size, False):
                     mu, sigma = self.actor_net(s[index])[0]
@@ -1281,9 +1292,9 @@ class PPOAgent(AgentMeta):
                     surrogate_loss2 = torch.clamp(ratio, 1.0 - self.clip_param, 1.0 + self.clip_param) * adv[index]
                     policy_loss = -torch.min(surrogate_loss1, surrogate_loss2).mean()
                     value_loss = F.smooth_l1_loss(self.actor_net(s[index])[1], target_v[index])
-                    # value_loss = F.mse_loss(r[index], values_pred)
                     entropy_loss = -torch.mean(-a_logprob)
                     total_loss = policy_loss + value_loss * self.vf_coef + entropy_loss * self.ent_coef
+                    # total_loss = policy_loss + 2 * value_loss
 
                     self.actor_optimizer.zero_grad()
                     total_loss.backward()
@@ -1295,7 +1306,12 @@ class PPOAgent(AgentMeta):
             self.save_transfer_weights()
             if self.local_episode % self.ConfigAgent.AGENTS_SYNC == 0:
                 # θ′ ← τ θ + (1 −τ )θ′
-                self.agents_net_updates()
+                if self.id_num == 0:
+                    self.agents_net_updates()
+                    self.save_transfer_weights()
+                    self.memory.clear()
+                else:
+                    self.load_transfer_weights(agent_id=0)
 
     def agents_net_updates(self):
         def state_dict_update(local_dict, other_dict):
@@ -1307,18 +1323,21 @@ class PPOAgent(AgentMeta):
         agents_lst = list(range(self.RLSYNC_obj.get_agents_running()))
         agents_lst.remove(self.id_num)
 
+        self.actor_net.eval()
         local_actor_net_state_dict = copy.deepcopy(self.actor_net.state_dict())
         local_value_net_state_dict = {}
 
         if self.discrete:
             local_value_net_state_dict = copy.deepcopy(self.value_net.state_dict())
 
+        self.actor_net.train(True)
         for agent_id in agents_lst:
             self.load_transfer_weights(agent_id)
             other_actor_net_state_dict = self.actor_net.state_dict()
             self.actor_net.load_state_dict(state_dict_update(local_actor_net_state_dict, other_actor_net_state_dict))
 
             if self.discrete:
+                self.value_net.eval()
                 other_value_net_state_dict = self.value_net.state_dict()
                 self.value_net.load_state_dict(
                     state_dict_update(local_value_net_state_dict, other_value_net_state_dict))

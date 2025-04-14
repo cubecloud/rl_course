@@ -59,20 +59,20 @@ class RollingRewardNormalizer:
 
 
 class FrameStack:
-    def __init__(self, num_frames: int = 4, norm=True):
+    def __init__(self, num_frames: int = 4, normalization=True):
         self.num_frames = num_frames
-        self.norm = norm
+        self.normalization = normalization
         self.frames = deque(maxlen=self.num_frames)
 
     def rgb2gray(self, rgb_frame):
         gray_frame = np.dot(rgb_frame[..., :3], [0.2989, 0.5870, 0.1140])
-        if self.norm:
+        if self.normalization:
             gray_frame = gray_frame / 128. - 1.
         return gray_frame
 
     def preprocess_frame(self, frame) -> np.ndarray:
-        frame = self.rgb2gray(frame).astype(np.float32)
-        return np.expand_dims(frame, axis=0)
+        gray_frame = self.rgb2gray(frame).astype(np.float64)
+        return np.expand_dims(gray_frame, axis=0)
 
     def __call__(self, frame) -> np.ndarray:
         self.add_frame(frame)
@@ -80,8 +80,9 @@ class FrameStack:
 
     def add_frame(self, frame):
         self.frames.append(self.preprocess_frame(frame))
-        while len(self.frames) < self.frames.maxlen:
-            self.frames.append(self.frames[0])
+        # if just starting
+        if len(self.frames) < self.frames.maxlen:
+            self.frames.extend([self.frames[0].copy()] * (self.num_frames - 1))
 
     def get_stacked_frames(self) -> np.ndarray:
         return np.concatenate(self.frames, axis=0)
@@ -153,13 +154,14 @@ class EnvFrameStackedWrapper:
         img_rgb = None
         done = False
         terminated = False
+        truncated = False
         info = {}
         action = self.scale_action(action)
         for i in range(self.action_repeat):
             img_rgb, reward, terminated, truncated, info = self.env.step(action)
             # don't penalize "die state"
-            # if terminated:
-            #     reward += 100
+            if terminated:
+                reward += 100   # we negate -100 to zero reward
             # penalty for prevail color
             reward = self._color_check_reward(img_rgb, reward)
             total_reward += reward
@@ -167,9 +169,9 @@ class EnvFrameStackedWrapper:
             done = True if self.ma_rrn(reward) <= self.ma_reward_condition else False
             if self.render_mode is not None:
                 self.render_frames.append(self.env.render())
-            if done or terminated:
+            if done or terminated or truncated:
                 break
-        return self.fms(img_rgb), total_reward, done, terminated, info
+        return self.fms(img_rgb), total_reward, done or terminated, truncated, info
 
     def render(self):
         return self.render_frames

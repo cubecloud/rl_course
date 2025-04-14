@@ -102,9 +102,9 @@ class ReplayBuffer:
 
     def get_episodes_range(self, batch_size=1):
         if self.episodes_indexes:
-            episode = []
-            real_size = min(len(self.episodes_indexes), batch_size)
             with rlmutex:
+                episode = []
+                real_size = min(len(self.episodes_indexes), batch_size)
                 eps_idx_start = self.episodes_indexes[-real_size][0]
                 eps_idx_end = self.episodes_indexes[-1][1]
                 for idx in range(eps_idx_start, eps_idx_end):
